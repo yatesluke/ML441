@@ -1,0 +1,631 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{bashful}
+% Requires adding to preamble:
+\usepackage{pgfplots}
+\usepackage{float}
+
+\pgfplotsset{compat=1.17}
+
+\begin{document}
+
+\title{Assignment 2}
+\author{
+    \IEEEauthorblockN{L.W. Yates, 26065401}
+    \IEEEauthorblockA{
+        Department of Computer Science\\
+        Stellenbosch University\\
+        Stellenbosch, South Africa\\
+        Email: 26065401@sun.ac.za
+    }
+}
+
+\maketitle
+
+\begin{abstract}
+This study compares \emph{k}-nearest neighbours (KNN) and classification trees on the Forest Cover dataset (581,012 instances, 58 features) which exhibits missing values, outliers, correlated features, and class imbalance. KNN preprocessing included standardization, mean imputation, and resampling techniques (SMOTE, Tomek Links). Classification trees used median imputation and cost-complexity pruning with entropy and Gini splitting criteria.
+
+Hyperparameter optimization employed 5-fold stratified cross-validation. KNN was tuned across \emph{k} values $\{1, 3, 5, 7, 9, 11, 13\}$ with Euclidean and Manhattan distance metrics. Classification trees were optimized using pruning path analysis. Final evaluation used 10-fold cross-validation with accuracy, F1-macro, precision, recall, specificity, and Cohen's kappa metrics.
+
+Classification trees significantly outperformed KNN across all metrics. The optimal KNN configuration (\emph{k}=3, Manhattan distance, Tomek Links) achieved 88.45\% accuracy and 0.816 F1-macro score, while the best classification tree (entropy splitting, $\alpha=1.32\times10^{-5}$) achieved 92.59\% accuracy and 0.883 F1-macro score. Paired \emph{t}-tests confirmed statistical significance ($p < 0.001$).
+
+The superior performance of classification trees stems from their robustness to outliers and noise, effective handling of mixed-type features, and accommodation of non-linear relationships. These findings demonstrate the importance of algorithm selection based on dataset characteristics and highlight how preprocessing and hyperparameter tuning substantially improve performance on challenging datasets.
+\end{abstract}
+
+
+\begin{IEEEkeywords}
+Machine Learning, KNN, K Nearest Neighbours, Classification Trees
+\end{IEEEkeywords}
+
+\section{Introduction}
+Classification is a fundamental task in machine learning, underpinning applications from medical diagnosis to fraud detection. Among the many algorithms available, KNN and classification trees stand out for their simplicity, interpretability, and non-parametric nature. 
+
+
+The dataset used in this assignment contains multiple types of data quality issues, including missing values, outliers, correlated features, and skewed class distributions. These issues complicate the modelling process and necessitate careful preprocessing tailored to each algorithm.
+
+
+This report aims to investigate how KNN and classification trees perform on this dataset once these issues are addressed. The models are trained, tuned, and evaluated using stratified cross-validation with accuracy and F1-score as performance metrics. Results are compared and discussed in light of expectations derived from theory.
+
+
+The remainder of this report is organised as follows: Section \ref{sec:background} provides background on the algorithms and expected effects of data quality issues. Section \ref{sec:methodology} outlines the methodology, including dataset description, preprocessing, and training. Section \ref{sec:empirical} describes the empirical procedure used for evaluation. Section \ref{sec:results} presents the experimental results and discussion. Section \ref{sec:conclusion} concludes the report with findings and future directions.
+
+%Think of this as a mini-summary of the whole report:
+
+%✔ Start broad – why is classification important in machine learning?
+%✔ Narrow down – why compare k-nearest neighbours and decision trees?
+%✔ Mention dataset – the forest cover dataset and why it’s interesting/challenging.
+%✔ Problem statement – the main issues (data quality, preprocessing needs, skewed classes).
+%✔ Goals – what this report sets out to do (build models, handle data issues, compare results).
+%✔ Brief description of approach – that you preprocess, train, tune, evaluate.
+%✔ Highlight key findings – e.g., which model worked best or what challenges you found.
+%✔ Outline structure – “The remainder of this report is organised as follows: Section 2… Section 3…”
+
+\section{Background}
+\label{sec:background}
+%(Machine learning algos + data quality expectations)
+This section introduces the theoretical foundations of KNN and classification trees, and discusses expectations regarding the influence of data quality issues on these models. The section first describes the algorithms, followed by a discussion of data-quality sensitivity.
+
+
+This assignment focuses on two supervised learning methods: \emph{k}-nearest neighbours (KNN) and classification trees. Both belong to the family of non-parametric models, meaning they make minimal assumptions about the underlying data distribution, but they differ fundamentally in their inductive biases and in how they are affected by data quality issues. The following sections provide an in-depth description of each algorithm and discuss the influence of data quality issues, drawing primarily on Kelleher et al.~\cite{kelleher2015fundamentals}.
+
+\subsection{K-nearest neighbours}
+KNN is an instance-based, or lazy, learning algorithm. Rather than building an explicit model during training, KNN stores all training instances and makes predictions at query time by identifying the $k$ most similar instances in feature space. The core inductive bias is the assumption that \emph{instances close to each other in feature space are likely to belong to the same class}. Classification is typically achieved through majority voting, though distance-weighted voting can improve robustness when class imbalance or noise is present.
+
+A key design decision is the choice of similarity measure. For numerical attributes, Euclidean and Manhattan distances are most common; for categorical or binary attributes, overlap, Jaccard, and Hamming measures may be used. Mixed-type data may require composite measures, such as Gower’s similarity, or appropriate preprocessing to ensure comparability across features.
+
+Data quality strongly influences KNN performance. Outliers can distort distances, although their effect is limited if $k$ is small, since majority voting reduces their influence. Missing values can be handled by either ignoring the affected features in distance computation or by imputing them, with KNN itself frequently used as an imputer by averaging or taking the mode of neighbouring values. Noise presents a greater challenge: for small $k$, the algorithm tends to overfit to noise, while larger $k$ values improve robustness at the cost of bias. Finally, KNN is sensitive to skewed class distributions, since neighbours from the majority class can dominate the vote. Solutions include weighted voting, undersampling (e.g., Tomek links), or oversampling (e.g., SMOTE). Normalisation or standardisation is also crucial, since features with larger numeric ranges otherwise dominate distance calculations.
+
+\subsection{Classification trees}
+Classification trees are supervised, information-based learners that use a recursive, divide-and-conquer strategy to partition the data into increasingly homogeneous subsets. The model is structured as a tree where internal nodes represent tests on descriptive features, branches represent outcomes of these tests, and leaves represent predicted class labels. The induction process seeks to reduce uncertainty in class distributions, usually measured by entropy or the Gini index, and proceeds until a stopping condition is met (e.g., homogeneous leaves, depth limit, or minimum node size). To improve generalisation, induced trees are often pruned to remove branches that capture noise or outliers.
+
+Classification trees have the advantage of interpretability: the path from root to leaf can be expressed as a set of production rules, which makes the model explainable in contrast to black-box approaches. However, they are prone to overfitting if grown without constraints, as they can perfectly fit training data by forming highly specific rules. They are also subject to biases such as favouring attributes with many outcomes (many-values bias) or relying on greedy splitting criteria without global optimisation.
+
+In terms of data quality, trees exhibit robustness to outliers and noise: such instances are often isolated in small leaves, which are subsequently pruned away. They are, however, sensitive to class imbalance. Minority classes typically appear in small leaves, which are pruned and absorbed into majority-class leaves, causing the minority to be misclassified. Missing values are handled more flexibly than in KNN: training cases with missing values can be fractionally assigned to multiple branches, and surrogate splits can be used when the primary splitting attribute is missing. Traditional methods such as mean and median imputation can also be used to great effect. 
+
+\subsection{Data-quality issues and algorithmic sensitivity}
+The dataset supplied for this assignment exhibits several remaining data-quality issues (missing values, outliers, features with differing numeric ranges, correlated/redundant features, and class skew). Below we summarise how each issue typically impacts KNN and classification tree methods and give short practical directions for preprocessing.
+
+\paragraph{Missing values}
+Missingness can bias model estimates and degrade predictive performance if treated incorrectly. The appropriate strategy depends on the type of missingness, of which there are three types. Missing completely at random (MCAR) occurs when the probability of missingness is not influenced by the available or unvailable data; missing at random (MAR) occurs when the missingness is related to the observed data but not the unobserved data; and missing not at random (MNAR) occurs when the missingness is related to the unobserved data \cite{kelleher2015fundamentals}. 
+For KNN, common strategies include:
+\begin{itemize}
+    \item Imputation: For each missing value we impute a value using the mean/median.
+    \item Distance-weighted imputation using nearest neighbours: We find the $k$ nearest neighbours and use their values to impute the missing value, weighting by distance.
+    \item Ignoring features with missing values in distance calculations (if few missing values): The chosen similarity measure is calculated by ignoring the missing values and scaling up the weight of the non-missing descriptive features. 
+\end{itemize}
+
+Classification trees can handle missing values by using the following strategies:
+\begin{itemize}
+    \item Surrogate splits: When a feature is missing, the tree can use another feature that is correlated with the missing feature to make a split.
+    \item Imputation: Missing values can be imputed using the mean/mode of the feature or a more sophisticated method such as k-NN imputation.
+    \item Ignoring missing values: If a feature has too many missing values, it can be ignored altogether.
+\end{itemize}
+
+
+
+\paragraph{Outliers}
+Outliers are data points that deviate significantly from the majority of the data, and can end up impacting model performance if they are not handled properly.
+For KNN, the sensitivity to outliers depends on the value K for the model. As K stays small, the probability for the model to select an outlier as a neighbour remains small, while larger values of K can include outliers in the majority vote.
+For classification trees, they are known to be robust to outliers. The reason for this is that outliers will tend to be isolated in their own leaf nodes, and after pruning, these leaf nodes are likely to be removed, thus reducing the impact of outliers on the overall model.
+
+
+\paragraph{Correlated / redundant features}
+High correlation between features increases dimensionality without adding information; KNN suffers because redundant dimensions can distort distances, while classification trees typically select one of the correlated features for splitting (reducing interpretability but not always harming predictive power). In practice, removing near-constant or highly redundant features, or using dimensionality reduction methods, can improve KNN performance and simplify tree structure \cite{kelleher2015fundamentals}.
+
+\paragraph{Class imbalance (skew)}
+When class distributions are highly skewed, simple accuracy is misleading. Techniques to address imbalance include using more informative performance metrics (precision, recall, F1, AUC), and applying resampling strategies (oversampling the minority class, undersampling the majority class). A widely used oversampling method is SMOTE (Synthetic Minority Over-sampling Technique), which generates synthetic minority examples. A commonly used undersampling method is Tomek Links, which removes examples from the majority class that are close to the minority class. 
+
+
+In the empirical work that follows we adopt preprocessing choices motivated by the above sensitivities: scaling prior to KNN, careful imputation for missing values (with justification based on observed missingness patterns), outlier detection and conservative treatment, and evaluation metrics and (where appropriate) resampling to handle class imbalance. These choices and their justifications are described in detail in Section~\ref{sec:methodology} and Section~\ref{sec:empirical}.
+
+%✔ High-level explanation of KNN (concept, pros/cons, sensitivity to data issues).
+%✔ High-level explanation of Decision Trees (concept, pros/cons, sensitivity to data issues).
+%✔ Expectations: how missing values, outliers, correlated features, skew affect KNN vs Trees.
+%✔ Refer to literature or basic ML concepts (with citations if possible).
+
+\section{Methodology}
+\label{sec:methodology}
+
+In this section we will describe the dataset, discuss the preprocessing steps taken for each model with justifications for each data quality issue resolution, and finally we will outline the model training and evaluation process.
+
+\subsection{Dataset description}
+The dataset used in this assignment is the Forest Cover Type dataset, which contains 581,012 instances and 58 features. The task is to predict the forest cover type (the target variable) based on these features. The dataset also has a mix of different data quality issues, refer to Table \ref{tab:data_quality_issues} for an overview.
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Key data quality issues in selected features.}
+    \begin{tabular}{|c|c|}
+        \hline
+        Feature & Data Issue \\
+        \hline
+        Slope & Missing (0.05\%) \\
+        Facet & Correlated \\
+        Inclination & Noisy \\
+        Various & Outliers \\
+        Various & Range differences \\
+        Various & Mixed types \\
+        Water Level & Single value \\
+        Obs. ID & Unique \\
+        Target & Imbalanced \\
+        \hline
+    \end{tabular}
+    \label{tab:data_quality_issues}
+\end{table}
+
+\subsection{Preprocessing Steps}
+For each model we applied different preprocessing steps to address the data quality issues identified in the dataset. Below we outline the steps taken for each model along with justifications.
+
+
+For KNN we first decided to drop Facet, Water\_Level, and Observation\_ID. Facet was dropped because it is highly correlated with Aspect, which can distort distance calculations in KNN. Water\_Level was dropped because it has only one unique value, which does not provide any useful information for the model. Observation\_ID was dropped because it is a unique identifier for each observation and does not contribute to the predictive power of the model.
+We also ensured that Soil Type 1 was hot encoded with the negative values encoded as 1 and the positive encoded as 0. To address the missing values in the Slope feature, we imputed the mean value of the column. The option of adjusting the distance calculation was also considered, but due to the minute impact of the missing values (0.0513\%), it was decided that mean imputation would be a simpler and effective solution.
+We then standardized the features to have zero mean and unit variance. As KNN is sensitive to the scale of the features, this step was crucial to ensure that all features contribute equally to the distance calculations.
+Finally to deal with class imbalances we tested SMOTE (Synthetic Minority Over-sampling Technique) to generate synthetic samples for the minority class, and Tomek Links to remove overlapping samples between classes. All data transformations and resampling operations (SMOTE, Tomek Links) were performed within each training fold to avoid data leakage. The results of these techniques will be discussed in the results section \ref{sec:results}.
+Other data quality issues such as outliers, and noise, are not dealt with by preprocessing. Rather we depend on the K value we will select in order to balance the impact of these two issues on our model.
+
+
+
+For classification trees, we performed similar data preprocessing steps as for KNN, with the exception of feature scaling and missing values. For missing values we simply imputed with the median instead of the mean, as it is more robust to outliers. With regards to feature scaling, classification trees are not always sensitive to the scale of the features, as they make decisions by finding the best split points on individual features, comparing values within each feature to determine thresholds. With regards to this dataset, this step was not necessary.
+There is no need to specifically address outliers or noise, as classification trees are robust to these issues. This is because the outliers will be all by themselves at the leaf nodes, and the leaves will be pruned, and all instances combined to form a subset for the parent node. This will result in outliers being in the minority, and thus not selected by the tree. Noisy patterns will also be isolated in their own leaf nodes, and similarly pruned away, meaning the noise will not affect the majority class.
+Though classification trees are robust to both outliers and noise, they are sensitive to class imbalance, as minority classes can be pruned away during tree construction. Therefore, addressing class imbalance was a priority in our preprocessing steps. We used the same methods to deal with class imbalances, the results of which will be discussed in the results section \ref{sec:results}.
+We trained the model using information gain (entropy), where we split the trees until we had a homogeneous set of samples in each leaf node. We then pruned the tree, as at a homogeneity of 1 we are perfectly fitted to the training set. Using sklearn's `cost\_complexity\_pruning\_path` function, we found all alpha values for each path, using no sampling, SMOTE and Tomek. We then tested each of these collections of alpha values on the a test set, the results of which can be seen in the results section \ref{sec:results}. Once the optimal alpha value for each method was found, we retrained the model on the combined training and validation set, and evaluated it on the test set.
+
+
+\subsection{Implementation choices}
+For the KNN \& Classification Tree models we used the following libraries with a random seed of 42, where applicable, for reproducibility. The libraries used are as follows:
+\begin{itemize}
+    \item \texttt{import numpy as np}
+    \item \texttt{import pandas as pd}
+    \item \texttt{from sklearn.model\_selection import train\_test\_split, StratifiedKFold}
+    \item \texttt{from sklearn.preprocessing import StandardScaler}
+    \item \texttt{from sklearn.neighbors import KNeighborsClassifier}
+    \item \texttt{from sklearn.tree import DecisionTreeClassifier}
+    \item \texttt{from sklearn.metrics import accuracy\_score, f1\_score, classification\_report}
+    \item \texttt{from imblearn.over\_sampling import SMOTE}
+    \item \texttt{from imblearn.under\_sampling import TomekLinks as Tomek}
+\end{itemize}
+
+
+%✔ Describe dataset version (forestCover.csv, features, target).
+%✔ Preprocessing: what transformations you applied (normalisation, missing value handling, feature removal).
+%✔ Justifications – why each step was necessary (very important for marks).
+%✔ Decisions on handling data quality issues (and if ignored, why).
+%✔ Implementation choices – libraries used, model setup.
+
+
+
+
+\section{Empirical Procedure}
+\label{sec:empirical}
+
+Performance metrics are vital when determining the performance of a machine learning model. We focused on accuracy and F1-score as the primary metrics. Accuracy, defined as 
+\(\text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN}\), 
+measures the proportion of correctly classified instances, 
+where \(TP\), \(TN\), \(FP\), and \(FN\) represent true positives, 
+true negatives, false positives, and false negatives, respectively 
+\cite{powers2011evaluation}.
+While accuracy is simple to interpret, it can be misleading in the presence of class imbalance. To address this, we also measured the F1-score, which balances precision and recall.
+Precision and recall are defined as 
+\(\text{Precision} = \frac{TP}{TP + FP}\) and 
+\(\text{Recall} = \frac{TP}{TP + FN}\), 
+while the F1-score, which balances both, is given by 
+\(\text{F1} = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}
+{\text{Precision} + \text{Recall}}\).
+
+This makes the F1-score particularly suitable for the Forest Cover dataset, where some classes are underrepresented.
+
+
+Cross-validation was used to estimate the generalisation ability of the models. In $k$-fold cross-validation, the dataset is divided into $k$ disjoint folds; the model is trained on $k-1$ folds and validated on the remaining fold, with the process repeated $k$ times \cite{kohavi1995study}. The final performance is the average across folds. We applied stratified 5-fold cross-validation, ensuring that class distributions were preserved across folds. This is due to computational constraints, as in the final evaluation 10-fold CV was used. However, five folds were chosen as a balance between computational efficiency and variance reduction, providing robust performance estimates without excessive training overhead.
+
+
+For KNN, two hyperparameters required tuning: the number of neighbours \(k\) 
+and the distance metric. The parameter \(k\) controls the bias–variance trade-off: 
+small \(k\) leads to low bias but high variance, while large \(k\) increases bias 
+but reduces variance \cite{kelleher2015fundamentals}. We evaluated values 
+\(k \in \{1, 3, 5, 7, 9, 11, 13\}\). 
+
+Two distance metrics were considered. Euclidean distance is defined as 
+\(d(x, y) = \sqrt{\sum_{i=1}^n (x_i - y_i)^2}\), which emphasises large 
+differences across features. Manhattan distance is defined as 
+\(d(x, y) = \sum_{i=1}^n |x_i - y_i|\), and is often more robust in 
+high-dimensional or sparse feature spaces.
+
+
+For Classification trees, we explored two splitting criteria: entropy (as used in C4.5 \cite{quinlan1993c4}) and Gini impurity (as used in CART \cite{breiman1984classification}). Entropy is defined as 
+\(H(S) = - \sum_{i=1}^c p_i \log_2 p_i\), 
+where \(p_i\) is the proportion of class \(i\) in subset \(S\). 
+The information gain of a split on attribute \(A\) is then 
+\(IG(S, A) = H(S) - \sum_{v \in Values(A)} \frac{|S_v|}{|S|} H(S_v)\), 
+where \(S_v\) is the subset of \(S\) with attribute \(A\) taking value \(v\).
+
+The Gini impurity of a subset \(S\) is defined as 
+\(\text{Gini}(S) = 1 - \sum_{i=1}^c p_i^2\), 
+where \(p_i\) denotes the proportion of class \(i\) in \(S\).
+
+Both criteria measure how well a feature split separates the data into pure subsets. To prevent overfitting, cost-complexity pruning was applied, where a complexity parameter $\alpha$ penalises tree size. The optimal $\alpha$ values were selected by evaluating their F1-scores.
+All preliminary experiments were run with fixed random seeds for reproducibility. Results were reported as mean and standard deviation across the five folds.
+
+
+For our final test runs on our selected models, 10 folds were used instead of the original 5, we also decided to expand our collection of performance metrics to include precision, recall, specificity, as well as Cohens Kappa and the use of a confusion matrix. 
+
+Specificity, which measures the proportion of true negatives correctly 
+identified, is defined as \(\text{Specificity} = \frac{TN}{TN + FP}\), 
+where \(TN\) and \(FP\) denote true negatives and false positives, respectively.  
+
+Cohen’s Kappa, which quantifies agreement between predicted and true 
+labels beyond chance, is given by 
+\(\kappa = \frac{P_o - P_e}{1 - P_e}\), 
+where \(P_o\) is the observed agreement and \(P_e\) is the expected 
+agreement by chance.
+
+As we are going to compare these two algorithms we require statistical tests to determine if the observed differences in performance are statistically significant.
+
+
+Our formal hypothesis is as follows:
+
+H0: There is no significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset, as measured by F1 score.
+
+H1: There is a significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset, as measured by F1 score.
+
+
+We use F1-macro score as our primary evaluation metric due to the class imbalance present in the Forest Cover dataset, where F1-macro provides equal weight to all classes regardless of their frequency.
+
+We conducted a paired t-test using F1-macro scores from 10-fold cross-validation to test our hypothesis at significance level α = 0.05. The pairing accounts for both algorithms being evaluated on identical data folds, reducing variance in the comparison.
+
+The paired t-test statistic is calculated as 
+\(t = \frac{\bar{d}}{s_d / \sqrt{n}}\), 
+where \(\bar{d}\) is the mean of the differences between paired 
+observations, \(s_d\) is the standard deviation of the differences, 
+and \(n\) is the number of pairs.
+
+Under the null hypothesis, this statistic follows a t-distribution with \(n-1\) degrees of freedom.
+
+
+This comprehensive evaluation framework allows for rigorous comparison of KNN and classification tree performance while accounting for the specific challenges presented by the Forest Cover dataset. The results of applying this methodology are presented in the following section, where we analyze both individual algorithm performance and comparative statistical significance.
+
+%✔ Performance metrics chosen (e.g., accuracy, F1-score due to class imbalance).
+%✔ Parameter tuning process (grid search, validation strategy).
+%✔ Cross-validation setup (number of folds + justification).
+%✔ Number of runs (if relevant).
+%✔ Any statistical tests.
+
+
+\section{Research Results}
+\label{sec:results}
+
+In this section we will discuss the results of our experiments, including preliminary algorithm exploration, the impact of preprocessing techniques, hyperparameter optimization, and final model performance.
+
+
+\subsection{Preliminary Algorithm Exploration}
+\label{sec:preliminary_algorithm_exploration}
+% Show baseline performance with different preprocessing
+
+We tested different variations of algorithms ranging from no preprocessing, to testing different distance measures, and different sampling techniques (SMOTE and Tomek Links). It must be noted that the pruning value for the classification trees, was calculated before the testing of these configurations, the only configuration that does not use the pruning value is the baseline configuration. These pruning values can be found in the section \ref{sec:hyperparameter_optimization}. For KNN we used a $k$ value of 5, the reason for this is that it is computationally infeasible to run the range of $k$ values on each variation. In Tables \ref{tab:knn_preliminary} and \ref{tab:dt_preliminary}, we show the results of KNN and Classification Trees with different configurations, with a heatmap in figure \ref{fig:heatmap_hyperparameter_tuning}. The performance metrics we use for these preliminary results are accuracy and F1-macro score.
+
+\begin{table}[h]
+\centering
+\caption{KNN preliminary results with k=5}
+\begin{tabular}{|l|c|c|}
+\hline
+Configuration & Accuracy & F1-macro \\
+\hline
+Baseline (Euclidean) & 0.864 ± 0.001 & 0.779 ± 0.006 \\
+SMOTE (Euclidean) & 0.844 ± 0.001 & 0.756 ± 0.006 \\
+Tomek (Euclidean) & 0.863 ± 0.001 & 0.776 ± 0.006 \\
+SMOTE (Manhattan) & 0.858 ± 0.002 & 0.772 ± 0.006 \\
+Tomek (Manhattan) & 0.879 ± 0.001 & 0.803 ± 0.006 \\
+\hline
+\end{tabular}
+\label{tab:knn_preliminary}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Classification Tree preliminary results}
+\begin{tabular}{|l|c|c|}
+\hline
+Configuration & Accuracy & F1-macro \\
+\hline
+Entropy (baseline) & 0.929 ± 0.001 & 0.890 ± 0.003 \\
+Entropy + SMOTE & 0.926 ± 0.001 & 0.875 ± 0.002 \\
+Entropy + Tomek & 0.922 ± 0.001 & 0.879 ± 0.004 \\
+Gini (baseline) & 0.929 ± 0.001 & 0.888 ± 0.001 \\
+Gini + SMOTE & 0.923 ± 0.002 & 0.868 ± 0.006 \\
+Gini + Tomek & 0.921 ± 0.001 & 0.871 ± 0.002 \\
+\hline
+\end{tabular}
+\label{tab:dt_preliminary}
+\end{table}
+
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{heatmap_scores.png}
+    \caption{Heatmap of Tuning Results}
+    \label{fig:heatmap_hyperparameter_tuning}
+\end{figure*}
+
+
+From the preliminary results, we can see that for KNN, using Tomek Links with the Manhattan distance metric provided the best performance in terms of both accuracy and F1-macro score. This suggests that removing overlapping samples between classes helps KNN better distinguish between classes, especially in the presence of class imbalance. The choice of distance metric also plays a significant role, with Manhattan distance outperforming Euclidean distance in this case.
+As for the classification tree, the results indicate that the choice of impurity measure (Entropy vs Gini) did not significantly impact performance, as both configurations yielded similar results. However, the use of SMOTE and Tomek Links did lead to a slight decrease in performance. 
+
+These results with respect to KNN are somewhat expected. Given the class imbalance of the dataset, undersampling with Tomek Links helps to create a more balanced training set, allowing KNN to better learn the decision boundaries between classes and results in a higher score. The Manhattan distance metric is also a major factor in these results. Across all variations the Manhattan distance performed consistently better than Euclidean distance. This could be due to the fact that Manhattan distance is less sensitive to outliers and better captures the structure of the data in high-dimensional spaces.
+
+
+The results for the classification trees show that the baseline configurations consistently outperformed those trained with SMOTE or Tomek Links. This finding appears counterintuitive, since classification trees are known to be sensitive to skewed class distributions: minority classes often end up in small leaves that are pruned and absorbed into majority classes. However, in this case the resampling strategies seem to have introduced additional complications. SMOTE interpolates synthetic minority examples that may not align with natural feature distributions, leading the tree to form less meaningful splits. Tomek Links, on the other hand, remove borderline samples that are critical for defining accurate decision boundaries. Even though pruning parameters were tuned for each resampled dataset, these structural changes reduced the tree’s ability to generalise. As a result, the unaltered dataset produced stronger overall performance despite the imbalance.
+
+
+
+
+
+\subsection{Hyperparameter Optimization}
+\label{sec:hyperparameter_optimization}
+
+For KNN, we tested different values of $k$ (1, 3, 5, 7, 9, 11, 13) with 5 folds to ensure robust evaluation. We also tested the distance metrics previously mentioned (Euclidean and Manhattan) in the previous section \ref{sec:preliminary_algorithm_exploration}. The reason for not performing a grid search, random search or Bayesian optimization was due to the computational cost and time constraints. Due to this, distance metrics were tested separately, and then tested KNN on the best configuration found.
+After testing these value of $k$ on the model using Tomek Links with the Manhattan distance metric, we found the results displayed in the table \ref{tab:knn_grid_search}, and visualised in figure \ref{fig:knn_k_vs_f1}.
+\begin{table}[H]
+\centering
+\caption{KNN Grid Search Results - All K Values}
+\label{tab:knn_grid_search}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{K Value} & \textbf{Mean Accuracy} & \textbf{Std Accuracy} & \textbf{Mean F1 Macro} & \textbf{Std F1 Macro} \\
+\hline
+1 & 0.876617 & 0.001983 & 0.804984 & 0.004821 \\
+\hline
+3 & 0.880605 & 0.001724 & 0.809393 & 0.005518 \\
+\hline
+5 & 0.879370 & 0.001100 & 0.803190 & 0.004942 \\
+\hline
+7 & 0.876843 & 0.000756 & 0.798115 & 0.004811 \\
+\hline
+9 & 0.874224 & 0.000944 & 0.793542 & 0.005429 \\
+\hline
+11 & 0.871706 & 0.001029 & 0.788215 & 0.005070 \\
+\hline
+13 & 0.869002 & 0.001005 & 0.783479 & 0.003756 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}
+        \begin{axis}[
+            width=\columnwidth,
+            height=6cm,
+            xlabel={k (number of neighbours)},
+            ylabel={F1-macro},
+            xmin=0.5, xmax=13.5,
+            ymin=0.78, ymax=0.82,
+            xtick={1,3,5,7,9,11,13},
+            ytick distance=0.005,
+            grid=both,
+            grid style={line width=.08pt, draw=gray!20},
+            major grid style={line width=.2pt, draw=gray!35},
+            tick align=outside,
+            tick label style={font=\small},
+            label style={font=\small},
+            legend style={at={(0.02,0.98)},anchor=north west, draw=none, fill=none, font=\small},
+            every axis plot/.append style={thick},
+            smooth,
+            mark options={solid, scale=1.1},
+            ]
+            \addplot+[color=teal, mark=o, mark options={fill=white}, line width=1.2pt]
+                coordinates {
+                    (1,0.804984)
+                    (3,0.809393)
+                    (5,0.803190)
+                    (7,0.798115)
+                    (9,0.793542)
+                    (11,0.788215)
+                    (13,0.783479)
+                };
+            \addlegendentry{Mean F1-macro}
+
+            \addplot+[only marks, mark=none, error bars/.cd, y dir=both, y explicit, error bar style={line width=0.8pt, color=gray!60}]
+                coordinates {
+                    (1,0.804984) +- (0,0.004821)
+                    (3,0.809393) +- (0,0.005518)
+                    (5,0.803190) +- (0,0.004942)
+                    (7,0.798115) +- (0,0.004811)
+                    (9,0.793542) +- (0,0.005429)
+                    (11,0.788215) +- (0,0.005070)
+                    (13,0.783479) +- (0,0.003756)
+                };
+
+            \draw[densely dashed, gray!60] (axis cs:3,0.782) -- (axis cs:3,0.812);
+            \node[anchor=south, font=\footnotesize, text=black] at (axis cs:3,0.812) {Best: k=3};
+            \addplot+[only marks, mark=*, mark size=3.2pt, color=orange, fill=orange]
+                coordinates {(3,0.809393)};
+
+        \end{axis}
+    \end{tikzpicture}
+    \caption{Effect of k on mean F1-macro for KNN. Points show means, thin caps indicate one standard deviation; best-performing k is highlighted.}
+    \label{fig:knn_k_vs_f1}
+\end{figure}
+
+After examining these results we can see that the best performance was achieved with $k=3$, yielding a mean accuracy of 0.880605 and a mean F1-macro score of 0.809393. This indicates that a smaller number of neighbours allows KNN to better capture local patterns in the data, leading to improved classification performance. As $k$ increases, the model becomes more biased towards the majority class, resulting in decreased performance metrics.
+
+
+While with classification trees we tested different alpha values to determine the best configuration for pruning. A variable in the sklearn DecisionTreeClassifier called ccp\_alpha controls the complexity of the tree by pruning it. We tested unique alphas for each configuration as mentioned previously and obtained the alpha value by using the function cost\_complexity\_pruning\_path. We compared these values using F1-score, the top 10 results of each can be seen in the tables \ref{tab:baseline_alpha_tuning}, \ref{tab:smote_alpha_tuning}, and \ref{tab:tomek_alpha_tuning}.
+
+\begin{table}[H]
+\centering
+\caption{Top 10 Alpha Values for Baseline Classification Tree}
+\label{tab:baseline_alpha_tuning}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Rank} & \textbf{Alpha ($\alpha$)} & \textbf{F1} & \textbf{Nodes} & \textbf{Depth} \\
+\hline
+1 & 1.323202e-05 & 0.892363 & 26531 & 39 \\
+2 & 1.333474e-05 & 0.892345 & 26441 & 39 \\
+3 & 1.250807e-05 & 0.892266 & 27823 & 39 \\
+4 & 1.347537e-05 & 0.892261 & 26287 & 39 \\
+5 & 1.283619e-05 & 0.892247 & 27369 & 39 \\
+6 & 1.260523e-05 & 0.892243 & 27735 & 39 \\
+7 & 1.373624e-05 & 0.892229 & 25951 & 39 \\
+8 & 1.235023e-05 & 0.892222 & 27951 & 39 \\
+9 & 1.359969e-05 & 0.892194 & 26117 & 39 \\
+10 & 1.395084e-05 & 0.892153 & 25793 & 39 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Top 10 Alpha Values for Tomek Classification Tree}
+\label{tab:tomek_alpha_tuning}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Rank} & \textbf{Alpha ($\alpha$)} & \textbf{F1} & \textbf{Nodes} & \textbf{Depth} \\
+\hline
+1 & 6.876173e-06 & 0.883191 & 30799 & 33 \\
+2 & 7.875869e-06 & 0.883156 & 30461 & 33 \\
+3 & 1.151093e-05 & 0.882873 & 26461 & 33 \\
+4 & 0.000000e+00 & 0.882619 & 31765 & 33 \\
+5 & 9.185940e-06 & 0.882328 & 29053 & 33 \\
+6 & 1.132054e-05 & 0.882311 & 26893 & 33 \\
+7 & 9.501301e-06 & 0.882299 & 28325 & 33 \\
+8 & 1.087512e-05 & 0.882143 & 27189 & 33 \\
+9 & 1.107787e-05 & 0.882014 & 27029 & 33 \\
+10 & 1.294098e-05 & 0.881955 & 24789 & 33 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Top 10 Alpha Values for SMOTE Classification Tree}
+\label{tab:smote_alpha_tuning}
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+\textbf{Rank} & \textbf{Alpha ($\alpha$)} & \textbf{F1} & \textbf{Nodes} & \textbf{Depth} \\
+\hline
+1 & 0.000000e+00 & 0.884129 & 31845 & 41 \\
+2 & 1.130157e-05 & 0.884092 & 28793 & 39 \\
+3 & 9.477934e-06 & 0.884033 & 30349 & 41 \\
+4 & 1.083709e-05 & 0.883987 & 28925 & 39 \\
+5 & 8.543190e-06 & 0.883972 & 30571 & 41 \\
+6 & 1.018652e-05 & 0.883907 & 29143 & 39 \\
+7 & 1.596626e-05 & 0.883742 & 23699 & 38 \\
+8 & 1.242036e-05 & 0.883684 & 27493 & 39 \\
+9 & 1.204330e-05 & 0.883591 & 27757 & 39 \\
+10 & 1.673245e-05 & 0.883568 & 23143 & 38 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\subsection{Final Model Performance}
+
+For our final models we have chosen KNN with $k=3$, using the Manhattan distance metric and Tomek Links as our sampling technique, 
+and for classification trees we have chosen the baseline configuration using Entropy as our impurity measure, and an alpha value of $1.323202e-05$ for pruning. The results of these final models can be seen in the tables \ref{tab:knn_final_results} and \ref{tab:dt_final_results}, as well as in the model comparison heatmap (Figure \ref{fig:model_comparison_heatmap}).
+
+
+\begin{table}[H]
+    \centering
+    \caption{KNN final model performance (mean $\pm$ std)}
+    \begin{tabular}{|l|c|}
+        \hline
+        Metric & Value \\
+        \hline
+        Accuracy & $0.8845 \pm 0.0026$ \\
+        F1-macro & $0.8159 \pm 0.0071$ \\
+        F1-weighted & $0.8839 \pm 0.0026$ \\
+        Precision & $0.8373 \pm 0.0067$ \\
+        Recall & $0.7977 \pm 0.0081$ \\
+        Specificity & $0.9728 \pm 0.0006$ \\
+        Cohen's Kappa & $0.8137 \pm 0.0042$ \\
+        \hline
+    \end{tabular}
+    \label{tab:knn_final_results}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \caption{Classification Tree final model performance (mean $\pm$ std)}
+    \begin{tabular}{|l|c|}
+        \hline
+        Metric & Value \\
+        \hline
+        Accuracy & $0.9259 \pm 0.0017$ \\
+        F1-macro & $0.8828 \pm 0.0037$ \\
+        F1-weighted & $0.9258 \pm 0.0017$ \\
+        Precision & $0.8877 \pm 0.0047$ \\
+        Recall & $0.8785 \pm 0.0039$ \\
+        Specificity & $0.9828 \pm 0.0004$ \\
+        Cohen's Kappa & $0.8809 \pm 0.0027$ \\
+        \hline
+    \end{tabular}
+    \label{tab:dt_final_results}
+\end{table}
+
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\columnwidth]{model_comparison_heatmap_knn_vs_dt.png}
+    \caption{Model Comparison Heatmap: KNN vs Classification Tree}
+    \label{fig:model_comparison_heatmap}
+\end{figure}
+
+
+To determine which model performed best we conducted a paired t-test as described in section \ref{sec:empirical}. The results of this test can be seen in table \ref{tab:ttest_results}.
+
+\begin{table}[H]
+\centering
+\caption{Paired t-test results for F1-macro}
+\label{tab:ttest_results}
+\begin{tabular}{|l|c|c|}
+\hline
+\hline
+Statistic & Value & Notes \\
+\hline
+Metric & f1-macro & \\
+KNN mean & 0.815891 & mean across folds \\
+DT mean & 0.882839 & mean across folds \\
+Mean difference (KNN - DT) & -0.066948 & \\
+Paired t-statistic & -29.7741 & df = 9 \\
+p-value & $2.6569\times10^{-10}$ & two-tailed \\
+\hline
+\end{tabular}
+\end{table}
+
+Based on our formal hypothesis testing framework, we can now evaluate the statistical evidence. Our null hypothesis H$_0$ states that there is no significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset, as measured by F1-macro score. The alternative hypothesis H$_1$ posits that there is a significant difference in performance between these classifiers.
+
+The paired t-test results provide compelling evidence to reject H$_0$ at the $\alpha = 0.05$ significance level. With a p-value of $2.6569\times10^{-10}$, which is substantially less than our predetermined significance threshold, we have strong statistical evidence against the null hypothesis. The test statistic $t = -29.7741$ with 9 degrees of freedom (n-1 = 10-1) falls well within the critical rejection region, confirming our decision to reject H$_0$.
+
+Therefore, we accept the alternative hypothesis H$_1$ and conclude that there is a statistically significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset. Specifically, the negative mean difference of -0.066948 indicates that the classification tree consistently outperforms KNN across all cross-validation folds in terms of F1-macro score.
+
+
+
+
+
+%✔ Tables/figures with performance results (means, std devs).
+%✔ Compare KNN vs Decision Tree.
+%✔ Discuss why results make sense (link back to expectations).
+%✔ Highlight trade-offs (accuracy vs interpretability, effect of skewed classes, preprocessing impact).
+%✔ Unexpected results and possible reasons.
+%✔ Strong justification of “best” model.
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This study compared the performance of \emph{k}-nearest neighbours (KNN) and classification tree classifiers on the Forest Cover dataset, with a focus on addressing data quality issues such as missing values, outliers, correlated features, and class imbalance. Both models were trained and evaluated using cross-validation, with accuracy, F1 score, and additional metrics guiding the analysis. 
+
+The results showed that classification trees consistently outperformed KNN across all evaluated metrics. KNN achieved its best performance with $k=3$ and the Manhattan distance metric combined with Tomek Links, but it remained more sensitive to class imbalance and high-dimensional feature interactions. In contrast, classification trees demonstrated greater robustness to noise and outliers, and careful pruning further improved their generalisation ability. Statistical testing confirmed that the observed performance difference was significant, providing strong evidence that classification trees are better suited to this dataset. 
+
+In conclusion, while KNN benefits from simplicity and interpretability, classification trees offered higher predictive performance and stronger resilience to the data quality issues present in the Forest Cover dataset. 
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{ref}
+
+\end{document}
