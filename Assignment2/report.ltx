@@ -27,31 +27,13 @@
 \maketitle
 
 \begin{abstract}
-This study compares \emph{k}-nearest neighbours (KNN) and classificTherefore, we accept the alternative hypothesis H$_1$ and conclude that there is a statistically significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset. Specifically, the negative mean difference of -0.066948 indicates that the classification tree consistently outperforms KNN across all cross-validation folds in terms of F1-macro score.
+This study compares \emph{k}-nearest neighbours (KNN) and classification trees on the Forest Cover dataset. We accept the alternative hypothesis H$_1$ and conclude that there is a statistically significant difference in predictive performance between KNN and Classification Tree classifiers on the Forest Cover dataset. Specifically, the negative mean difference of -0.066948 indicates that the classification tree consistently outperforms KNN across all cross-validation folds in terms of F1-macro score.
+\end{abstract}
 
 
 \section{Code Availability}
 
 The complete implementation of this study, including data preprocessing, model training, hyperparameter tuning, and evaluation scripts, is available in the project repository at: \url{https://github.com/yatesluke/ML441}
-
-
-%✔ Tables/figures with performance results (means, std devs).
-%✔ Compare KNN vs Decision Tree.
-%✔ Discuss why results make sense (link back to expectations).
-%✔ Highlight trade-offs (accuracy vs interpretability, effect of skewed classes, preprocessing impact).
-%✔ Unexpected results and possible reasons.
-%✔ Strong justification of "best" model.
-
-
-\section{Conclusion}the Forest Cover dataset (581,012 instances, 58 features) which exhibits missing values, outliers, correlated features, and class imbalance. KNN preprocessing included standardization, mean imputation, and resampling techniques (SMOTE, Tomek Links). Classification trees used median imputation and cost-complexity pruning with entropy and Gini splitting criteria.
-
-Hyperparameter optimization employed 5-fold stratified cross-validation. KNN was tuned across \emph{k} values $\{1, 3, 5, 7, 9, 11, 13\}$ with Euclidean and Manhattan distance metrics. Classification trees were optimized using pruning path analysis. Final evaluation used 10-fold cross-validation with accuracy, F1-macro, precision, recall, specificity, and Cohen's kappa metrics.
-
-Classification trees significantly outperformed KNN across all metrics. The optimal KNN configuration (\emph{k}=3, Manhattan distance, Tomek Links) achieved 88.45\% accuracy and 0.816 F1-macro score, while the best classification tree (entropy splitting, $\alpha=1.32\times10^{-5}$) achieved 92.59\% accuracy and 0.883 F1-macro score. Paired \emph{t}-tests confirmed statistical significance ($p < 0.001$).
-
-The superior performance of classification trees stems from their robustness to outliers and noise, effective handling of mixed-type features, and accommodation of non-linear relationships. These findings demonstrate the importance of algorithm selection based on dataset characteristics and highlight how preprocessing and hyperparameter tuning substantially improve performance on challenging datasets.
-\end{abstract}
-
 
 \begin{IEEEkeywords}
 Machine Learning, KNN, K Nearest Neighbours, Classification Trees
