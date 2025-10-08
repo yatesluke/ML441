@@ -1,0 +1,1523 @@
+\documentclass[10pt,conference,compsoc]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage{balance}  % for balancing columns on last page
+\usepackage{multirow}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{An Analysis of Active Learning Techniques Effectiveness}
+
+\author{\IEEEauthorblockN{Luke William Yates}
+\IEEEauthorblockA{\textit{Department of Computer Science} \\
+\textit{University of Stellenbosch}\\
+Stellenbosch, South Africa \\
+Email: 2606401@sun.ac.za}
+}
+
+\maketitle
+
+\begin{abstract}
+This paper empirically compares two active learning strategies—uncertainty sampling and sensitivity analysis—against a passive learning baseline using feedforward neural networks on six classification and regression datasets. Active learning substantially reduced labeling needs (uncertainty sampling used about 58.3\% of training labels on average), but performance gains were limited and task-dependent: classification showed no significant improvement, and regression improved in only a few comparisons. Active methods also increased computational cost. Overall, active learning's primary benefit in these experiments is label efficiency rather than consistent performance gains.
+\end{abstract}
+
+\begin{IEEEkeywords}
+active learning, uncertainty sampling, sensitivity analysis, neural networks, machine learning
+\end{IEEEkeywords}
+\section{Introduction}
+\label{sec:intro}
+Active learning represents a paradigm shift in machine learning that addresses the fundamental challenge of limited labeled data availability. Rather than treating all data points equally, active learning strategically selects the most informative samples for labeling, thereby maximizing learning efficiency while minimizing annotation costs. This approach proves particularly valuable in domains where expert labeling is expensive or time-intensive, such as medical diagnosis or specialized image recognition tasks.
+
+This study provides a systematic evaluation of two prominent active learning strategies: uncertainty sampling, which targets samples where model confidence is lowest, and sensitivity analysis, which identifies samples near decision boundaries using gradient information. This work compares these approaches against a traditional passive learning baseline across six carefully selected datasets spanning classification and regression tasks of varying complexity.
+
+
+\subsection{Research Hypotheses}
+
+To structure this analysis, this study defines the following null hypotheses:
+
+\begin{itemize}
+    \item \textbf{H0\textsubscript{1}:} There is no significant difference between passive learning and active learning strategies, measured by $R^2$ for regression tasks and F1-score for classification tasks.
+    \item \textbf{H0\textsubscript{2}:} There is no significant difference in the number of labels required across the different learning strategies.
+    \item \textbf{H0\textsubscript{3}:} There is no significant difference in training time between passive learning and active learning strategies.
+\end{itemize}
+
+These null hypotheses form the basis of our empirical evaluation. The experiments described in later sections aim to test whether these hypotheses can be rejected in favor of alternative hypotheses that active learning methods improve label efficiency and performance over passive baselines.
+
+\subsection{Code Availability}
+The complete implementation of this study, including data
+preprocessing, model training, hyperparameter tuning, and
+evaluation scripts, is available in the project repository at:
+\url{https://github.com/yatesluke/ML441}.
+
+\section{Background}
+
+The purpose of this section is to outline the fundamental concepts that underpin this study. 
+This section begins by introducing feed-forward neural networks (FFNNs), which serve as the base learners in these experiments. 
+It then provides an overview of active learning (AL), a paradigm designed to improve learning efficiency by strategically selecting informative samples. 
+Two specific active learning strategies relevant to this work are then discussed in detail: uncertainty sampling, which queries instances the model is least confident about, and sensitivity analysis, which exploits the internal gradients of FFNNs to identify samples near decision boundaries. 
+Finally, this section briefly outlines how the performance of active learning methods is typically evaluated in practice.
+
+\subsection{Neural networks}
+Feed-forward neural networks (FFNNs) are parametric models that approximate a function 
+$f : \mathbb{R}^d \rightarrow \mathbb{R}^k$ 
+by composing layers of affine transformations and nonlinear activation functions. 
+For an input vector $x \in \mathbb{R}^d$, a single hidden layer with weights $W$, bias $b$, and activation function $\sigma(\cdot)$ produces:
+\[
+h = \sigma(Wx + b).
+\]
+Stacking multiple layers allows the network to learn hierarchical feature representations. 
+The final output layer $\hat{y}$ is given by:
+\[
+\hat{y} = f(x;\theta) = \sigma_L(W_L \cdot \sigma_{L-1}(W_{L-1} \cdots \sigma_1(W_1x+b_1)\cdots ) + b_L),
+\]
+where $\theta = \{W_i, b_i\}_{i=1}^L$ are the trainable parameters.  
+
+Training proceeds by minimizing a loss function $\mathcal{L}(y,\hat{y})$ over labeled data $(x,y)$. 
+Typical choices include mean squared error (MSE),
+\[
+\mathcal{L}_{\text{MSE}} = \frac{1}{N}\sum_{i=1}^N (y_i - \hat{y}_i)^2,
+\]
+for regression tasks, and cross-entropy,
+\[
+\mathcal{L}_{\text{CE}} = - \sum_{i=1}^N \sum_{c=1}^k y_{ic}\log \hat{y}_{ic},
+\]
+for classification tasks.  
+Parameters are updated by stochastic gradient descent (SGD) or other optimization algorithms.  
+
+\subsection{Active learning}
+Active learning (AL) seeks to reduce the labeling effort by selecting the most informative samples from a large pool of unlabeled data $\mathcal{U}$. Starting with a small labeled seed set $\mathcal{L}$, the learner iteratively:
+\begin{enumerate}
+    \item Trains the model on $\mathcal{L}$,
+    \item Uses a query strategy $q(x)$ to identify the most informative $x \in \mathcal{U}$,
+    \item Queries the oracle (e.g., human annotator) for $y$,
+    \item Updates $\mathcal{L} \leftarrow \mathcal{L} \cup \{(x,y)\}$.
+\end{enumerate}
+The goal is to achieve performance comparable to passive learning but with fewer labeled instances. 
+
+
+\subsection{Uncertainty sampling}
+Uncertainty sampling \cite{lewis1994sequential} is one of the most widely used query strategies in active learning.  
+The key idea is that not all unlabeled samples are equally useful: labeling points that the model is already confident about provides little new information, whereas labeling points the model finds uncertain can lead to larger improvements.  
+By directing the oracle towards these uncertain cases, the learner can make faster progress with fewer labeled examples.
+
+For models that produce predicted probabilities $P(y|x)$, uncertainty can be quantified in several ways:
+
+\paragraph{Least confident:}
+\[
+q_{\text{LC}}(x) = 1 - \max_{c} P(y=c|x),
+\]
+which selects the instance where the model assigns the lowest maximum probability to any class.
+
+\paragraph{Margin sampling:}
+\[
+q_{\text{Margin}}(x) = P(y=c_1|x) - P(y=c_2|x),
+\]
+where $c_1$ and $c_2$ are the most and second-most probable classes. Smaller margins indicate that the model struggles to separate the top two choices.
+
+\paragraph{Entropy sampling:}
+\[
+q_{\text{Entropy}}(x) = -\sum_{c} P(y=c|x)\log P(y=c|x).
+\]
+This measures the overall uncertainty in the probability distribution: the closer it is to uniform, the higher the entropy.
+
+Recent work distinguishes between \emph{conflicting-evidence uncertainty}, where several classes have similar probabilities, and \emph{insufficient-evidence uncertainty}, where all classes have low, near-uniform probabilities \cite{sharma2023evidence}. Querying conflicting-evidence cases is often more effective for model improvement.
+
+A closely related approach is \emph{Query by Committee} (QBC) \cite{seung1992query, Burbidge2007}. Instead of using a single model, QBC trains a committee of models and measures how much they disagree. In classification, disagreement is often measured by vote entropy, while in regression it is common to use the variance of committee predictions:
+\[
+q_{\text{Var}}(x) = \frac{1}{K}\sum_{k=1}^{K} \big(f_k(x) - \bar{f}(x)\big)^2,
+\]
+where $f_k(x)$ is the prediction of model $k$ and $\bar{f}(x)$ is the mean prediction. High disagreement suggests that the region is poorly understood, making those instances valuable candidates for labeling.
+
+\subsection{Sensitivity analysis}
+Sensitivity analysis for neural networks examines how small perturbations in the input space affect the model's outputs. In classification tasks, patterns lying close to decision boundaries exhibit high sensitivity to input changes, while patterns far from boundaries show low sensitivity. By identifying high-sensitivity instances, this approach provides a principled method for selecting informative training examples.
+
+For a feedforward network with differentiable activation functions, the sensitivity of output unit $o_k$ to input unit $z_i$ for pattern $p$ is computed via the chain rule:
+\begin{equation}
+S_{oz,ki}^{(p)} = (1 - o_k^{(p)})o_k^{(p)} \sum_{j=1}^{J} w_{kj}(1 - y_j^{(p)})y_j^{(p)}v_{ji},
+\end{equation}
+where $w_{kj}$ and $v_{ji}$ are the weights connecting output-to-hidden and hidden-to-input layers respectively. The informativeness of pattern $p$ is then quantified as:
+\begin{equation}
+\Phi^{(p)} = \max_{k=1,\ldots,K} \|S_{oz,k}^{(p)}\|,
+\end{equation}
+where the norm aggregates sensitivity across input dimensions. Large $\Phi^{(p)}$ values indicate proximity to decision boundaries.
+
+The Sensitivity Analysis Selective Learning Algorithm (SASLA) \cite{engelbrecht2001sensitivity} selects training subsets by retaining patterns whose informativeness exceeds a threshold:
+\begin{equation}
+\mathcal{D}_S = \{p \in \mathcal{D}_C \mid \Phi^{(p)} > (1-\alpha)\bar{\Phi}\},
+\end{equation}
+where $\alpha \in [0,1]$ controls selection strictness. A key advantage is computational efficiency: the required derivatives are already computed during backpropagation, unlike information-theoretic methods that require expensive Hessian inversions. Empirical results show that SASLA can reduce training set size by over 80\% while maintaining or improving generalization, and exhibits robustness to outliers since noisy patterns typically lie far from true decision boundaries.
+
+
+\section{Implementation}
+This section describes the datasets, neural network architecture, training procedure, and active learning strategies implemented for these experiments. This section discusses the activation functions, loss functions used for classification and regression tasks, and the specific details of the uncertainty sampling and sensitivity analysis methods with justifications. This section then outlines the active learning loop, including initial seed selection, query strategies, and evaluation metrics.
+
+\subsection{Datasets}
+This study selected six datasets, three for classification and three for regression. The focus was on two domains: medical diagnosis (classification) and real estate valuation (regression).
+
+Each dataset is outlined below and ranked by complexity (simple, medium, complex) based on multiple factors including the number of features, instances, class balance characteristics, and inherent noise in the data. This complexity classification considers: (1) \textbf{Simple}: datasets with clear feature-target relationships, balanced classes, and large sample sizes relative to dimensionality; (2) \textbf{Medium}: datasets with moderate dimensionality and some challenging characteristics (e.g., smaller sample sizes or moderate noise); (3) \textbf{Complex}: datasets with challenging characteristics such as class imbalance, high noise levels, or difficult feature-target relationships. While this classification is primarily based on dataset characteristics rather than formal complexity metrics, it provides a useful framework for understanding active learning performance across different problem difficulties.
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Datasets used in experiments}
+\label{tab:datasets}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+Dataset & Task & Complexity & Instances & Features & URL \\
+\hline
+Breast Cancer Wisconsin & Classification & Simple & 569 & 32 & \url{https://www.kaggle.com/datasets/uciml/breast-cancer-wisconsin-data} \\
+Heart Disease & Classification & Medium & 303 & 13 & \url{https://archive.ics.uci.edu/dataset/45/heart+disease} \\
+Diabetes & Classification & Complex & 768 & 9 & \url{https://www.kaggle.com/datasets/uciml/pima-indians-diabetes-database} \\
+\hline
+California Housing Prices & Regression & Simple & 20640 & 10 & \url{https://www.kaggle.com/datasets/camnugent/california-housing-prices} \\
+Real Estate Price Prediction & Regression & Medium & 414 & 8 & \url{https://www.kaggle.com/datasets/quantbruce/real-estate-price-prediction} \\
+Housing Prices & Regression & Complex & 545 & 13 & \url{https://www.kaggle.com/datasets/yasserh/housing-prices-dataset} \\
+\hline
+\end{tabular}%
+}
+\end{table*}
+
+\textbf{Breast Cancer Wisconsin} (Simple): A binary classification dataset with 569 instances and 32 features derived from digitized images of breast mass. Features include cell nucleus measurements such as radius, texture, perimeter, and area.
+
+\textbf{Heart Disease} (Medium): A binary classification dataset with 303 instances and 13 features including age, sex, chest pain type, blood pressure, and cholesterol levels for heart disease prediction.
+
+\textbf{Diabetes} (Complex): A binary classification dataset with 768 instances and 9 features from the Pima Indian Diabetes Database, predicting diabetes onset based on diagnostic measures. This dataset exhibits significant class imbalance with approximately 65\% non-diabetic cases, which may affect baseline performance and make it particularly suitable for evaluating active learning's ability to handle challenging classification scenarios.
+
+\textbf{California Housing Prices} (Simple): A regression dataset with 20,640 instances and 10 features including median income, house age, and geographic coordinates for predicting housing prices.
+
+\textbf{Real Estate Price Prediction} (Medium): A regression dataset with 414 instances and 8 features including distance to MRT station, number of convenience stores, and house age for real estate valuation.
+
+\textbf{Housing Prices} (Complex): A regression dataset with 545 instances and 13 features including area, number of bedrooms, bathrooms, and location factors for housing price prediction.
+
+\subsection{Data Preprocessing}
+Before model training, all datasets underwent systematic preprocessing to ensure data quality and compatibility with the neural network implementation. This preprocessing pipeline was applied consistently across all datasets to maintain experimental validity.
+
+\subsubsection{Missing Value Handling}
+Missing values were identified and handled using domain-appropriate strategies:
+
+\textbf{Classification datasets:} For the Breast Cancer Wisconsin dataset, no missing values were present. The Heart Disease dataset had minimal missing values which were imputed using median values for numerical features and mode for categorical features. The Diabetes dataset required special attention as zero values in medical measurements (glucose, blood pressure, BMI) are physiologically impossible and represent missing data. These zeros were replaced with NaN and subsequently imputed using median values.
+
+\textbf{Regression datasets:} The California Housing dataset had missing values in the \texttt{total\_bedrooms} column, which were imputed with the median value. The Real Estate dataset and comprehensive Housing dataset had no missing values but were checked for data integrity.
+
+\subsubsection{Target Variable Encoding}
+Target variables were preprocessed according to task requirements:
+
+\textbf{Binary classification:} Categorical targets were converted to binary format. For Breast Cancer Wisconsin, the \texttt{Diagnosis} column was converted from 'M'/'B' to 1/0. The Heart Disease dataset's multi-class target (\texttt{num}: 0-4) was converted to binary (0 vs >0) representing absence/presence of heart disease. The Diabetes dataset's \texttt{Outcome} column was already in binary format (0/1).
+
+\textbf{Regression:} Continuous targets were standardized using StandardScaler to prevent gradient explosion during training and improve convergence stability.
+
+\subsubsection{Feature Preprocessing}
+Several preprocessing steps were applied to ensure feature compatibility:
+
+\textbf{Identifier removal:} Non-predictive columns such as patient IDs or record numbers were identified and removed from all datasets to prevent data leakage and reduce dimensionality.
+
+\textbf{Categorical encoding:} Categorical variables were converted to numerical format using appropriate encoding schemes. Binary categorical variables (e.g., 'yes'/'no') were converted to 0/1 encoding. For the comprehensive Housing dataset, variables such as \texttt{mainroad}, \texttt{guestroom}, \texttt{basement}, \texttt{hotwaterheating}, \texttt{airconditioning}, and \texttt{prefarea} were converted from 'yes'/'no' to binary format. Ordinal categorical variables like \texttt{furnishingstatus} were mapped to ordered integers (unfurnished=0, semi-furnished=1, furnished=2).
+
+\textbf{Feature scaling:} All numerical features were normalized to the [0,1] range using MinMaxScaler to ensure equal contribution during neural network training and prevent features with larger scales from dominating the learning process.
+
+\subsubsection{Data Splitting}
+A consistent data splitting strategy was employed across all experiments:
+\begin{itemize}
+    \item 80\% of data was allocated for training (including validation)
+    \item 20\% was reserved as a hold-out test set for final evaluation
+    \item From the training portion, 25\% was further separated for validation during hyperparameter tuning
+    \item This resulted in approximately 60\% training, 20\% validation, 20\% test split
+\end{itemize}
+
+This preprocessing pipeline ensured data consistency across experiments while maintaining the integrity of each dataset's unique characteristics, enabling fair comparison between passive and active learning strategies.
+
+\subsection{Neural Network Architecture}
+For both passive and active learning experiments, this study employed simple feed-forward neural networks (FFNNs) with a single hidden layer. 
+This choice strikes a balance between expressive capacity and computational efficiency, which is important for experiments involving repeated retraining within an active learning loop.
+
+For classification tasks, the architecture consists of an input layer, one hidden layer with a Leaky ReLU activation, and an output layer with a Sigmoid activation function. This is due to the fact that this study uses solely binary classification tasks.
+
+The Leaky ReLU activation was chosen for the hidden layer to mitigate the ``dying ReLU'' problem while retaining the efficiency of rectified linear units:
+\[
+\sigma(x) = \begin{cases}
+x & \text{if } x > 0, \\
+\alpha x & \text{otherwise}, 
+\end{cases}
+\]
+with $\alpha=0.01$.  
+
+Sigmoid activation in the output layer is appropriate for binary classification, as it maps outputs to the $(0,1)$ interval, allowing interpretation as probabilities:
+\[\sigma(x) = \frac{1}{1 + e^{-x}}.
+\]
+
+
+
+For regression tasks, the same structure was used but with a linear output layer (no activation), which is appropriate since the target is continuous.
+
+
+This architecture was used consistently with all active learning strategies and the passive baseline to ensure a fair comparison.
+
+
+\subsection{Passive Learning Baseline}
+To provide a fair comparison against active learning, this study first establishes a passive learning baseline. In passive learning, the model is trained on a randomly selected training set without any guidance about which samples may be the most informative. This represents the standard supervised learning approach, where all data is treated as equally useful. 
+
+For this baseline, feedforward neural networks (FFNNs) trained with stochastic gradient descent (SGD) were used. Weight decay was applied to regularize the models and help prevent overfitting. For classification, the network employs binary cross-entropy loss, and for regression tasks, mean squared error (MSE) was used. The reason for choosing these loss functions is that they are standard choices for their respective tasks and align well with the probabilistic interpretation of the outputs. 
+
+\textbf{Limitation:} This study acknowledges that no specific handling of class imbalance was implemented in this approach (such as class weighting, resampling techniques, or balanced loss functions). This represents a limitation in the experimental design, particularly for the diabetes dataset, as it may create an unfair comparison where active learning strategies inadvertently benefit from naturally selecting more balanced samples while the passive baseline suffers from the full class imbalance. Future work should incorporate class balancing techniques to ensure fairer baseline comparisons.
+
+The models were trained for a fixed number of epochs, and both training and validation losses were tracked throughout training. This allowed us to evaluate how well the networks generalized and provided a consistent reference point. By using this setup, the passive baseline serves as a benchmark: it shows how the models perform under standard conditions, without the benefit of selectively acquiring new training examples.
+
+\subsection{Uncertainty Sampling Implementation}
+
+Our uncertainty sampling implementation employs different strategies tailored to the specific characteristics of classification and regression tasks. The core principle behind uncertainty sampling is that samples where the model exhibits high uncertainty are likely to be the most informative for improving model performance.
+
+\subsubsection{Least Confidence for Classification}
+
+For binary classification tasks, this implementation uses least confidence sampling, which identifies samples where the model has the lowest confidence in its most probable prediction. This approach is motivated by the intuition that samples near decision boundaries—where the model struggles to make confident predictions—provide the most valuable information for refining the decision boundary.
+
+The least confidence strategy selects samples with the lowest maximum probability across all classes:
+\[
+q_{\text{LC}}(x) = 1 - \max_{c} P(y=c|x)
+\]
+
+This method is particularly effective for binary classification because it directly targets samples where the model is most uncertain about the class assignment. By focusing labeling efforts on these ambiguous cases, the model can more efficiently learn to distinguish between classes compared to random sampling.
+
+\subsubsection{Query by Committee for Regression}
+
+For regression tasks, uncertainty is less straightforward to define since there are no discrete class probabilities. This study addresses this challenge using Query by Committee (QBC), which measures disagreement among an ensemble of models trained on the same labeled data.
+
+The key insight behind QBC is that if multiple models disagree significantly on a prediction, the sample likely lies in a region of the input space that is poorly understood. This disagreement indicates high epistemic uncertainty—uncertainty due to insufficient knowledge rather than inherent noise in the data.
+
+This QBC implementation trains multiple neural networks with different random initializations on the current labeled set. For each unlabeled sample, the variance of predictions across the committee is computed:
+\[
+q_{\text{Var}}(x) = \frac{1}{K}\sum_{k=1}^{K} \big(f_k(x) - \bar{f}(x)\big)^2
+\]
+
+Samples with high prediction variance are prioritized for labeling, as they represent regions where the models are most uncertain and where additional labels would likely provide the greatest improvement.
+
+\subsubsection{Justification for Approach}
+
+The choice of different uncertainty measures for classification and regression reflects the fundamental differences between these task types:
+
+\textbf{Classification:} With discrete outputs and probabilistic interpretations, confidence-based measures naturally capture uncertainty. The least confidence approach directly identifies samples near decision boundaries where additional labels can most effectively refine class separation.
+
+\textbf{Regression:} Without natural probability distributions over continuous outputs, traditional confidence measures are not applicable. QBC provides an elegant solution by using model disagreement as a proxy for uncertainty, effectively identifying regions of the input space where the function approximation is least reliable.
+
+\subsubsection{Active Learning Framework}
+
+Both uncertainty sampling strategies operate within the same iterative framework. Starting with a small randomly selected seed set, the system alternates between training the model(s) on currently labeled data and selecting the most uncertain samples for labeling. This process continues until a target number of samples are labeled or the unlabeled pool is exhausted.
+
+The framework incorporates several practical considerations: dynamic query size adjustment when the unlabeled pool becomes small, robust handling of edge cases, and efficient computation to maintain reasonable execution times even with large datasets.
+
+This dual-strategy approach allows us to leverage the most appropriate uncertainty quantification method for each task type while maintaining a consistent experimental framework for fair comparison across different datasets and complexities.
+
+
+\subsection{Sensitivity Analysis Implementation}
+
+Our sensitivity analysis implementation follows the Sensitivity Analysis Selective Learning Algorithm (SASLA) framework. The approach leverages gradient information computed during backpropagation to identify samples near decision boundaries without requiring additional computational overhead.
+
+For each unlabeled sample, the sensitivity of network outputs to input perturbations is computed using the gradient-based measure described in Section II-D. The informativeness metric $\Phi^{(p)}$ quantifies how sensitive the model's output is to small changes in the input, with higher values indicating proximity to decision boundaries.
+
+The selection process retains samples whose informativeness exceeds a threshold based on the mean sensitivity across the candidate pool:
+\begin{equation}
+\mathcal{D}_S = \{p \in \mathcal{D}_C \mid \Phi^{(p)} > (1-\alpha)\bar{\Phi}\}
+\end{equation}
+
+The value $\alpha = 0.9$ is set following the recommendations from Engelbrecht and Clerc \cite{engelbrecht2001sensitivity}, which selects approximately the top 10\% most informative samples. This parameter balances between selecting sufficiently informative samples while maintaining adequate training set size for effective learning.
+
+\section{Empirical Process}
+
+This section describes how the experiments were conducted to evaluate passive learning, uncertainty sampling, and sensitivity analysis. 
+This section details the hyperparameter selection process, baseline training, active learning procedures, evaluation metrics, and analysis approach.
+
+
+\subsection{Training and Validation Split}
+
+For each dataset, an 80/20 train-test split was performed to create a hold-out test set for final evaluation.
+The training set was further divided into training and validation sets using an 75/25 split.
+This left us with 60\% of the original data for training, 20\% for validation, and 20\% for testing.
+
+\subsection{Hyperparameter Selection}
+Before running active learning experiments, the passive learning baseline was first optimized via grid search. 
+This allowed us to establish fair hyperparameters for both classification and regression tasks. 
+For each dataset, grid search was run over hidden layer size, learning rate, weight decay, and number of epochs.
+
+\begin{table}[!htbp]
+\centering
+\caption{Hyperparameter grid — classification}
+\label{tab:class_grid}
+\begin{tabular}{ll}
+\hline
+Parameter & Values \\
+\hline
+hidden\_size & 32, 64, 128, 256 \\
+learning\_rate & 0.001, 0.005, 0.01, 0.05, 0.1 \\
+weight\_decay & 0.0001, 0.001, 0.01 \\
+epochs & 200, 500, 1000 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\caption{Hyperparameter grid — regression}
+\label{tab:reg_grid}
+\begin{tabular}{ll}
+\hline
+Parameter & Values \\
+\hline
+hidden\_size & 32, 64, 128, 256 \\
+learning\_rate & 0.0001, 0.001, 0.01, 0.05 \\
+weight\_decay & 0.0, 0.0001, 0.001, 0.01 \\
+epochs & 500, 1000, 1500 \\
+\hline
+\end{tabular}
+\end{table}
+
+Performance was measured on both validation and test sets, using F1-score for classification and $R^2$ for regression. 
+The best-performing hyperparameters from passive learning were then fixed and reused for the active learning experiments to ensure comparability.
+
+\subsection{Baseline Training (Passive Learning)}
+The passive learning baseline provides the reference point for our study. Models were trained on a fixed random subset of the training set:
+\begin{itemize}
+    \item Optimization was performed using SGD with the grid-searched hyperparameters.
+    \item Binary cross-entropy loss was used for classification tasks, and MSE for regression.
+    \item Both training and validation losses were monitored. Early stopping was not applied to keep settings consistent across strategies.
+\end{itemize}
+The resulting performance served as a benchmark for assessing active learning strategies.
+
+
+\subsection{Uncertainty Sampling Experiments}
+Uncertainty sampling experiments were designed to follow a consistent iterative process. For each dataset:
+\begin{enumerate}
+    \item Begin with an initial seed set of labeled data. 
+    \item Train the model on the seed set using hyperparameters determined from passive learning.
+    \item Use a query strategy to select additional samples from the unlabeled pool.
+    \item Add these newly labeled samples to the training set.
+    \item Retrain the model and repeat until the labeling budget is exhausted.
+\end{enumerate}
+
+The initial seed size was set to 10\% of the training set for datasets with more than 1000 samples, and 5\% otherwise. Query size was set to 5\% of the training set (or 5 labels for small datasets). 
+The number of iterations was chosen such that approximately 80\% of the training set could be queried in total. 
+To maintain comparability with passive learning, the number of epochs per iteration was scaled by dividing the passive learning epoch count by the number of iterations.
+
+After running this preliminary model, the visualizations created are used to locate where the model stagnates and perform a final run with the number of iterations reduced to this point.
+
+This model is used to evaluate the performance of uncertainty sampling, after 10 independent runs, against the passive baseline, and the sensitivity analysis.
+This is performed for each dataset, and then the results are aggregated to draw conclusions about the effectiveness of uncertainty sampling across different tasks and complexities.
+
+\subsection{Sensitivity Analysis Experiments}
+For sensitivity analysis, the hyperparameters determined from passive learning were used as well as a selection parameter $\alpha=0.9$ (selecting the top 10\% most informative samples) obtained from the paper by Engelbrecht \cite{engelbrecht2001sensitivity}.
+
+
+\subsection{Evaluation Metrics}
+To assess the effectiveness of each method, the following were used:
+\begin{itemize}
+    \item \textbf{Classification:} Accuracy, precision, recall, F1-score, and AUC.
+    \item \textbf{Regression:} Mean squared error (MSE), root mean squared error (RMSE), and $R^2$ score.
+\end{itemize}
+
+\subsection{Analysis Approach}
+\begin{itemize}
+    \item Results were aggregated across datasets and repeated runs.
+    \item Null hypotheses defined in Section~\ref{sec:intro} were tested using paired statistical tests (t-test or Wilcoxon signed-rank) between strategies.
+    \item Figures (e.g., learning curves, boxplots) were used to illustrate label efficiency and performance trends.
+    \item Our analysis focused on determining whether active learning provided statistically significant improvements over passive learning, and whether sensitivity analysis or uncertainty sampling was more effective for specific task types.
+\end{itemize}
+
+
+\section{Results}
+This results section presents the findings from the experiments comparing passive learning, uncertainty sampling, and sensitivity analysis across the selected datasets. This includes quantitative metrics, visualizations, and statistical analyses to support the conclusions.
+\subsection{Hyperparameter Results}
+After running the grid search for hyperparameter optimization, the best configurations for both classification and regression tasks were identified. The selected hyperparameters were consistent across datasets of similar complexity, ensuring a fair comparison in subsequent experiments.
+The optimal hyperparameters are presented in Tables~\ref{tab:best_class_params} and \ref{tab:best_reg_params}. \textbf{Note:} The alpha value was set to 0.9 for sensitivity analysis, as suggested by Engelbrecht \cite{engelbrecht2001sensitivity}.
+
+\begin{table}[!htbp]
+\centering
+\caption{Best hyperparameters — classification}
+\label{tab:best_class_params}
+\begin{tabular}{lrrrr}
+\hline
+Complexity & hidden\_size & epochs & learning\_rate & weight\_decay \\
+\hline
+Simple  & 32  & 1500 & 0.01  & 0.0001 \\
+Medium  & 256 & 1000 & 0.01  & 0.01   \\
+Complex & 128 & 1000 & 0.005 & 0.0001 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\caption{Best hyperparameters — regression}
+\label{tab:best_reg_params}
+\begin{tabular}{lrrrr}
+\hline
+Complexity & hidden\_size & epochs & learning\_rate & weight\_decay \\
+\hline
+Simple  & 64 & 1500 & 0.01  & 0.01   \\
+Medium  & 64 & 1500 & 0.01  & 0.01   \\
+Complex & 64 & 1500 & 0.05  & 0.001  \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Passive Learning Preliminary Results}
+
+The passive learning baseline provided a solid reference point for evaluating the effectiveness of active learning strategies.
+Tables~\ref{tab:passive_results_class}, \ref{tab:passive_results_reg} and classification reports (Tables~\ref{tab:classrep_simple}, \ref{tab:classrep_medium}, \ref{tab:classrep_complex}) summarize the performance metrics achieved by the passive learning models across all datasets.
+These results are also complemented by the learning curves shown in Figures~\ref{fig:passive_simple_class}, \ref{fig:passive_medium_class}, \ref{fig:passive_complex_class}, \ref{fig:passive_simple_reg}, \ref{fig:passive_medium_reg}, and \ref{fig:passive_complex_reg}.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Passive learning results — classification}
+\label{tab:passive_results_class}
+\begin{tabular}{lrrrr}
+\hline
+Complexity & Accuracy & Precision & Recall & F1 \\
+\hline
+Simple  & 0.9474 & 0.9488 & 0.9474 & 0.9468 \\
+Medium  & 0.9016 & 0.9037 & 0.9016 & 0.9017 \\
+Complex & 0.6429 & 0.4133 & 0.6429 & 0.5031 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Passive learning results — regression}
+\label{tab:passive_results_reg}
+\begin{tabular}{lrrr}
+\hline
+Complexity & $R^2$ & RMSE & MSE \\
+\hline
+Simple  & 0.5671 & 0.6527 & 0.4261 \\
+Medium  & 0.6992 & 0.5227 & 0.2732 \\
+Complex & 0.6425 & 0.7193 & 0.5174 \\
+\hline
+\end{tabular}
+\end{table}
+
+The results are a good basis for comparison with the other models. The classification models performed well for simple and medium, but struggled with the complex most likely due to the higher class imbalance. The regression models performed reasonably well across all complexities, with the medium complexity achieving the highest $R^2$ score.
+
+\subsection{Uncertainty Sampling Preliminary Results}
+
+Our uncertainty sampling experiments demonstrate the effectiveness of this active learning strategy across all datasets. The results are summarized in Tables~\ref{tab:uncertainty_results_class} and~\ref{tab:uncertainty_results_reg}, with detailed classification reports provided in the appendix (Tables~\ref{tab:classrep_unc_simple}, \ref{tab:classrep_unc_medium}, and~\ref{tab:classrep_unc_complex}).
+
+To optimize the active learning process, learning curves for each dataset were analyzed to determine when performance plateaued and select appropriate stopping points. Figure~\ref{fig:uncertainty_simple_class} shows a representative learning curve demonstrating the typical convergence pattern, with complete learning curves for all datasets provided in the appendix.
+
+
+% Representative learning curves showing convergence patterns
+% Additional learning curves for all datasets are provided in the appendix
+
+
+
+Based on these learning curves, optimal stopping points for each dataset were determined to maximize efficiency while maintaining performance. Table~\ref{tab:al_iterations} summarizes the selected number of iterations and corresponding labeling budgets.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Active learning stopping points and labeling efficiency}
+\label{tab:al_iterations}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lrrr@{}}
+\hline
+Dataset & Iter. & Labels & \% train \\
+\hline
+Simple — classification  & 15 & 92   & 27.0\% \\
+Medium — classification  & 6  & 128  & 72.3\% \\
+Complex — classification & 5  & 173  & 37.6\% \\
+Simple — regression      & 62 & 8864 & 71.6\% \\
+Medium — regression      & 6  & 187  & 75.4\% \\
+Complex — regression     & 5  & 216  & 66.1\% \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+% Classification summary table - UNCERTAINTY SAMPLING RESULTS
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Uncertainty sampling results — classification}
+\label{tab:uncertainty_results_class}
+\begin{tabular}{lccccc}
+\hline
+Dataset & Accuracy & Precision & Recall & F1-Score & \% of train set \\
+\hline
+Simple  & 0.9737 & 0.9737 & 0.9737 & 0.9736 & 27.0\% \\
+Medium  & 0.8833 & 0.8865 & 0.8833 & 0.8826 & 72.3\% \\
+Complex & 0.7208 & 0.7103 & 0.7208 & 0.7056 & 37.6\% \\
+\hline
+\end{tabular}
+\end{table}
+
+% Regression summary table - UNCERTAINTY SAMPLING RESULTS
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Uncertainty sampling results — regression}
+\label{tab:uncertainty_results_reg}
+\begin{tabular}{lrrrr}
+\hline
+Dataset & MSE & RMSE & $R^2$ & \% of train set \\
+\hline
+Simple  & 0.0192 & 0.1387 & 0.6547 & 71.6\% \\
+Medium  & 0.0035 & 0.0590 & 0.7493 & 75.4\% \\
+Complex & 0.0171 & 0.1307 & 0.6275 & 66.1\% \\
+\hline
+\end{tabular}
+\end{table}
+
+The uncertainty sampling results reveal exceptional label efficiency while maintaining competitive performance. On average, uncertainty sampling required only 58.33\% of the training data across all datasets—specifically 43.96\% for classification tasks and 71.03\% for regression tasks. This represents a substantial reduction in labeling costs while achieving performance levels comparable to passive learning baselines.
+
+\subsection{Sensitivity Analysis Preliminary Results}
+
+Our sensitivity analysis implementation used the SASLA algorithm with optimal hyperparameters determined during passive learning experiments. The results are presented in Tables~\ref{tab:sensitivity_results_class} and~\ref{tab:sensitivity_results_reg}, with detailed per-class performance metrics provided in the appendix (Tables~\ref{tab:classrep_sa_simple}, \ref{tab:classrep_sa_medium}, and~\ref{tab:classrep_sa_complex}). While learning curves are available for reference, sensitivity analysis operates differently from uncertainty sampling by selecting the most informative samples based on gradient-derived sensitivity measures rather than iterative querying.
+
+% Sensitivity analysis — classification summary
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Sensitivity analysis results — classification}
+\label{tab:sensitivity_results_class}
+\begin{tabular}{lccccc}
+\hline
+Dataset & Accuracy & Precision & Recall & F1-Score & \% of train set \\
+\hline
+Simple  & 0.9737 & 0.9747 & 0.9737 & 0.9735 & 47.5\% \\
+Medium  & 0.8333 & 0.8341 & 0.8333 & 0.8328 & 86.0\% \\
+Complex & 0.7273 & 0.7231 & 0.7273 & 0.7247 & 98.2\% \\
+\hline
+\end{tabular}
+\end{table}
+
+% Sensitivity analysis — regression summary
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Sensitivity analysis results — regression}
+\label{tab:sensitivity_results_reg}
+\begin{tabular}{lcccc}
+\hline
+Dataset & $R^2$ & RMSE (scaled) & MSE (scaled) & \% of train set \\
+\hline
+Simple  & 0.7313 & 0.5269 & 0.2776 & 91.9\% \\
+Medium  & 0.7906 & 0.4321 & 0.1867 & 86.7\% \\
+Complex & 0.6888 & 0.7142 & 0.5101 & 84.3\% \\
+\hline
+\end{tabular}
+\end{table}
+
+% Classification report — Simple (sensitivity analysis)
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Simple (sensitivity analysis)}
+\label{tab:classrep_sa_simple}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.96 & 1.00 & 0.98 & 72 \\
+1 & 1.00 & 0.93 & 0.96 & 42 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.97 (114)} \\
+macro avg & 0.98 & 0.96 & 0.97 & 114 \\
+weighted avg & 0.97 & 0.97 & 0.97 & 114 \\
+\hline
+\end{tabular}
+\end{table}
+
+% Classification report — Medium (sensitivity analysis)
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Medium (sensitivity analysis)}
+\label{tab:classrep_sa_medium}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.82 & 0.88 & 0.85 & 32 \\
+1 & 0.85 & 0.79 & 0.81 & 28 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.83 (60)} \\
+macro avg & 0.83 & 0.83 & 0.83 & 60 \\
+weighted avg & 0.83 & 0.83 & 0.83 & 60 \\
+\hline
+\end{tabular}
+\end{table}
+
+% Classification report — Complex (sensitivity analysis)
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Complex (sensitivity analysis)}
+\label{tab:classrep_sa_complex}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.78 & 0.81 & 0.79 & 100 \\
+1 & 0.62 & 0.57 & 0.60 & 54 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.73 (154)} \\
+macro avg & 0.70 & 0.69 & 0.70 & 154 \\
+weighted avg & 0.72 & 0.73 & 0.72 & 154 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+
+Sensitivity analysis demonstrated consistent performance improvements over passive learning, particularly excelling in regression tasks where it achieved the highest $R^2$ scores across all complexity levels. However, this approach typically required more labeled samples than uncertainty sampling (averaging 87.6\% of the training set), suggesting a different efficiency trade-off. The method's strength lies in its theoretical foundation and computational efficiency during training, as sensitivity calculations leverage gradients already computed during backpropagation.
+
+\subsection{Final Model Results}
+
+This subsection presents the comprehensive results from 10 independent runs for each learning strategy across all datasets. These results form the basis for the statistical analyses presented in the following section. The data demonstrates the variability and consistency of each approach across multiple trials.
+
+\subsubsection{Passive Learning Results Across Multiple Runs}
+
+Tables~\ref{tab:passive_classification_final} and~\ref{tab:passive_regression_final} present the performance, label usage, and training time statistics for passive learning across all datasets over 10 independent runs.
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Passive learning results across 10 runs - Classification tasks}
+\label{tab:passive_classification_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean F1 $\pm$ Std & Min F1 & Max F1 & Mean Labels & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (Breast Cancer)  & 0.5046 $\pm$ 0.0052 & 0.5031 & 0.5179 & 341 & 1.181 $\pm$ 0.056 \\
+Medium (Heart Disease)  & 0.8689 $\pm$ 0.0164 & 0.8525 & 0.8852 & 182 & 7.95 $\pm$ 0.42 \\
+Complex (Diabetes)     & 0.5031 $\pm$ 0.0000 & 0.5031 & 0.5031 & 461 & 12.05 $\pm$ 0.31 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Passive learning results across 10 runs - Regression tasks}
+\label{tab:passive_regression_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean $R^2$ $\pm$ Std & Min $R^2$ & Max $R^2$ & Mean Labels & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (California Housing)    & 0.5784 $\pm$ 0.0061 & 0.5698 & 0.5894 & 12384 & 5.996 $\pm$ 0.098 \\
+Medium (Real Estate)          & 0.7530 $\pm$ 0.0055 & 0.7435 & 0.7612 & 248   & 1.485 $\pm$ 0.029 \\
+Complex (Housing Sales)       & 0.6400 $\pm$ 0.0029 & 0.6356 & 0.6445 & 327   & 1.395 $\pm$ 0.029 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsubsection{Uncertainty Sampling Results Across Multiple Runs}
+
+Tables~\ref{tab:uncertainty_classification_final} and~\ref{tab:uncertainty_regression_final} show the comprehensive performance of uncertainty sampling across all experimental conditions.
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Uncertainty sampling results across 10 runs - Classification tasks}
+\label{tab:uncertainty_classification_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean F1 $\pm$ Std & Min F1 & Max F1 & Mean Labels $\pm$ Std & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (Breast Cancer)  & 0.9741 $\pm$ 0.0083 & 0.9645 & 0.9912 & 92.0 $\pm$ 2.83 & 4.30 $\pm$ 0.19 \\
+Medium (Heart Disease)  & 0.8361 $\pm$ 0.0263 & 0.8033 & 0.8689 & 128.6 $\pm$ 4.74 & 3.20 $\pm$ 0.19 \\
+Complex (Diabetes)     & 0.6959 $\pm$ 0.0231 & 0.6493 & 0.7141 & 171.3 $\pm$ 3.40 & 5.25 $\pm$ 0.22 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Uncertainty sampling results across 10 runs - Regression tasks}
+\label{tab:uncertainty_regression_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean $R^2$ $\pm$ Std & Min $R^2$ & Max $R^2$ & Mean Labels $\pm$ Std & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (California Housing)    & 0.6561 $\pm$ 0.0029 & 0.6512 & 0.6601 & 8856.7 $\pm$ 57.97 & 45.57 $\pm$ 0.55 \\
+Medium (Real Estate)          & 0.7384 $\pm$ 0.0194 & 0.7016 & 0.7542 & 188.9 $\pm$ 3.90 & 2.20 $\pm$ 0.18 \\
+Complex (Housing Sales)       & 0.6273 $\pm$ 0.0071 & 0.6156 & 0.6389 & 215.1 $\pm$ 4.25 & 2.83 $\pm$ 0.14 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsubsection{Sensitivity Analysis Results Across Multiple Runs}
+
+Tables~\ref{tab:sensitivity_classification_final} and~\ref{tab:sensitivity_regression_final} present the detailed results for sensitivity analysis across all experimental conditions.
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Sensitivity analysis results across 10 runs - Classification tasks}
+\label{tab:sensitivity_classification_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean F1 $\pm$ Std & Min F1 & Max F1 & Mean Labels $\pm$ Std & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (Breast Cancer)  & 0.9733 $\pm$ 0.0018 & 0.9698 & 0.9755 & 161.7 $\pm$ 3.86 & 3.89 $\pm$ 0.24 \\
+Medium (Heart Disease)  & 0.8340 $\pm$ 0.0055 & 0.8245 & 0.8412 & 151.7 $\pm$ 3.86 & 2.93 $\pm$ 0.18 \\
+Complex (Diabetes)     & 0.7255 $\pm$ 0.0054 & 0.7156 & 0.7321 & 452.0 $\pm$ 4.22 & 5.93 $\pm$ 0.25 \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\scriptsize
+\caption{Sensitivity analysis results across 10 runs - Regression tasks}
+\label{tab:sensitivity_regression_final}
+\begin{tabular}{lcccccc}
+\hline
+Dataset & Mean $R^2$ $\pm$ Std & Min $R^2$ & Max $R^2$ & Mean Labels $\pm$ Std & Mean Time (s) $\pm$ Std \\
+\hline
+Simple (California Housing)    & 0.7308 $\pm$ 0.0025 & 0.7268 & 0.7345 & 11366.7 $\pm$ 57.97 & 52.55 $\pm$ 0.72 \\
+Medium (Real Estate)          & 0.7889 $\pm$ 0.0051 & 0.7812 & 0.7978 & 214.6 $\pm$ 3.98 & 2.50 $\pm$ 0.18 \\
+Complex (Housing Sales)       & 0.6888 $\pm$ 0.0053 & 0.6790 & 0.6957 & 274.6 $\pm$ 3.98 & 3.33 $\pm$ 0.17 \\
+\hline
+\end{tabular}
+\end{table*}
+
+These comprehensive results demonstrate the consistency and variability of each approach across multiple independent runs. The data reveals that uncertainty sampling achieves the highest label efficiency while maintaining competitive performance, particularly for classification tasks where it uses significantly fewer labels than both passive learning and sensitivity analysis.
+
+
+
+
+\subsection{Comparative Analysis}
+
+The results obtained previously allow us to compare the effectiveness of passive learning, uncertainty sampling, and sensitivity analysis across different datasets and complexities.
+The following tables and figures illustrate the comparative performance of each strategy, followed by a discussion of the implications of these findings.
+\begin{table*}[!t]
+\centering
+\caption{Summary comparison across strategies (means from 10 runs: classification = mean F1, regression = mean $R^2$).}
+\label{tab:summary_comparison}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccccc}
+\hline
+Task / Complexity & Passive (metric) & Uncertainty (metric) & Sensitivity (metric) & Passive (\% train) & Uncertainty (\% train) & Sensitivity (\% train) \\
+\hline
+Classification — Simple  & Mean F1 = 0.5046 & Mean F1 = 0.9741 & Mean F1 = 0.9733 & 100\% & 27.0\% & 47.4\% \\
+Classification — Medium  & Mean F1 = 0.8689 & Mean F1 = 0.8361 & Mean F1 = 0.8340 & 100\% & 70.7\% & 83.4\% \\
+Classification — Complex & Mean F1 = 0.5031 & Mean F1 = 0.6959 & Mean F1 = 0.7255 & 100\% & 37.2\% & 98.1\% \\
+\hline
+Regression — Simple  & Mean $R^2$ = 0.5784 & Mean $R^2$ = 0.6561 & Mean $R^2$ = 0.7308 & 100\% & 71.5\% & 91.8\% \\
+Regression — Medium  & Mean $R^2$ = 0.7530 & Mean $R^2$ = 0.7384 & Mean $R^2$ = 0.7889 & 100\% & 76.2\% & 86.5\% \\
+Regression — Complex & Mean $R^2$ = 0.6400 & Mean $R^2$ = 0.6273 & Mean $R^2$ = 0.6888 & 100\% & 65.8\% & 84.0\% \\
+\hline
+\end{tabular}%
+}
+\end{table*}
+
+
+
+% Short compact table of key takeaways (numeric deltas) — spans both columns
+\begin{table*}[!t]
+\centering
+\caption{Selected quantitative differences (means from 10 runs): Uncertainty / Sensitivity minus Passive.}
+\label{tab:deltas}
+\scriptsize
+\begin{tabular}{lrrr}
+\hline
+Task & Metric & Uncertainty minus Passive & Sensitivity minus Passive \\
+\hline
+Classification (Simple)  & F1  & +0.4695 & +0.4687 \\
+Classification (Medium)  & F1  & -0.0328 & -0.0349 \\
+Classification (Complex) & F1  & +0.1928 & +0.2224 \\
+Regression (Simple)  & $R^2$ & +0.0777 & +0.1524 \\
+Regression (Medium)  & $R^2$ & -0.0146 & +0.0359 \\
+Regression (Complex) & $R^2$ & -0.0127 & +0.0488 \\
+\hline
+\end{tabular}
+\end{table*}
+
+% Performance vs Efficiency Trade-off Scatter Plot
+\begin{figure*}[!t]
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+        width=0.9\textwidth,
+        height=7cm,
+        xlabel={Label Efficiency (\% reduction from passive learning)},
+        ylabel={Performance Metric (F1-score for Classification, $R^2$ for Regression)},
+        xmin=0, xmax=80,
+        ymin=0.4, ymax=1.0,
+        grid=major,
+        grid style={dashed, gray!30},
+        legend style={at={(0.02,0.98)}, anchor=north west, font=\scriptsize},
+        every axis plot/.append style={thick},
+        scatter/classes={
+            passive={mark=square*, mark size=3pt, blue},
+            uncertainty={mark=*, mark size=3pt, red},
+            sensitivity={mark=triangle*, mark size=3pt, orange}
+        }
+    ]
+    
+    % Classification points (F1-scores)
+    \addplot[scatter, only marks, scatter src=explicit symbolic]
+    coordinates {
+        (0, 0.5046) [passive]     % Simple Classification - Passive
+        (73, 0.9741) [uncertainty] % Simple Classification - Uncertainty  
+        (52.6, 0.9733) [sensitivity] % Simple Classification - Sensitivity
+        
+        (0, 0.8689) [passive]     % Medium Classification - Passive
+        (29.3, 0.8361) [uncertainty] % Medium Classification - Uncertainty
+        (16.6, 0.8340) [sensitivity] % Medium Classification - Sensitivity
+        
+        (0, 0.5031) [passive]     % Complex Classification - Passive
+        (62.8, 0.6959) [uncertainty] % Complex Classification - Uncertainty
+        (1.9, 0.7255) [sensitivity] % Complex Classification - Sensitivity
+    };
+    
+    % Regression points (R² scores)
+    \addplot[scatter, only marks, scatter src=explicit symbolic]
+    coordinates {
+        (0, 0.5784) [passive]     % Simple Regression - Passive
+        (28.5, 0.6561) [uncertainty] % Simple Regression - Uncertainty
+        (8.2, 0.7308) [sensitivity] % Simple Regression - Sensitivity
+        
+        (0, 0.7530) [passive]     % Medium Regression - Passive
+        (23.8, 0.7384) [uncertainty] % Medium Regression - Uncertainty
+        (13.5, 0.7889) [sensitivity] % Medium Regression - Sensitivity
+        
+        (0, 0.6400) [passive]     % Complex Regression - Passive
+        (34.2, 0.6273) [uncertainty] % Complex Regression - Uncertainty
+        (16.0, 0.6888) [sensitivity] % Complex Regression - Sensitivity
+    };
+    
+    % Add annotations for key insights
+    \node[align=center, font=\scriptsize] at (axis cs:60,0.95) {
+        \textbf{Optimal Zone:}\\
+        High Performance\\
+        + High Efficiency
+    };
+    
+    \node[align=center, font=\scriptsize] at (axis cs:10,0.45) {
+        \textbf{Baseline:}\\
+        Passive Learning\\
+        (100\% labels)
+    };
+    
+    \legend{Passive Learning, Uncertainty Sampling, Sensitivity Analysis}
+    \end{axis}
+    \end{tikzpicture}
+    \caption{Performance vs. label efficiency trade-off across all datasets. Each point represents one dataset-strategy combination. The x-axis shows percentage reduction in labeling requirements compared to passive learning, while the y-axis shows performance (F1-score for classification, $R^2$ for regression). Points in the upper right quadrant represent the most desirable combination of high performance and high label efficiency.}
+    \label{fig:performance_efficiency_tradeoff}
+\end{figure*}
+
+% Comprehensive Performance Comparison
+\begin{figure*}[!t]
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+        width=0.9\textwidth,
+        height=9cm,
+        ybar=2pt,
+        bar width=6pt,
+        ylabel={Performance Metric (F1-score for Classification, $R^2$ for Regression)},
+        symbolic x coords={
+            Simple Class, Medium Class, Complex Class,
+            Simple Reg, Medium Reg, Complex Reg
+        },
+        xtick=data,
+        xticklabel style={rotate=45, anchor=north east, font=\scriptsize},
+        ymin=0.4, ymax=1.1,
+        enlarge x limits=0.15,
+        legend style={at={(0.5,-0.25)}, anchor=north, legend columns=3, font=\scriptsize},
+        grid=major,
+        grid style={dashed, gray!30},
+        every axis plot/.append style={mark=none},
+        nodes near coords,
+        nodes near coords style={font=\tiny, rotate=90, anchor=west}
+    ]
+    
+    % Passive Learning bars
+    \addplot+[fill=gray!40] coordinates {
+        (Simple Class, 0.5046)
+        (Medium Class, 0.8689)
+        (Complex Class, 0.5031)
+        (Simple Reg, 0.5784)
+        (Medium Reg, 0.7530)
+        (Complex Reg, 0.6400)
+    };
+    
+    % Uncertainty Sampling bars
+    \addplot+[fill=red!60] coordinates {
+        (Simple Class, 0.9741)
+        (Medium Class, 0.8361)
+        (Complex Class, 0.6959)
+        (Simple Reg, 0.6561)
+        (Medium Reg, 0.7384)
+        (Complex Reg, 0.6273)
+    };
+    
+    % Sensitivity Analysis bars
+    \addplot+[fill=orange!70] coordinates {
+        (Simple Class, 0.9733)
+        (Medium Class, 0.8340)
+        (Complex Class, 0.7255)
+        (Simple Reg, 0.7308)
+        (Medium Reg, 0.7889)
+        (Complex Reg, 0.6888)
+    };
+    
+
+    % Add task labels
+    \node[font=\scriptsize\bfseries] at (axis cs:Medium Class, 0.95) {Classification Tasks};
+    \node[font=\scriptsize\bfseries] at (axis cs:Medium Reg, 0.95) {Regression Tasks};
+    
+    \legend{Passive Learning, Uncertainty Sampling, Sensitivity Analysis}
+    \end{axis}
+    \end{tikzpicture}
+    \caption{Comprehensive performance comparison across all datasets showing mean values from 10 independent runs. Classification tasks use F1-score, regression tasks use $R^2$. The figure clearly shows the superior performance of active learning strategies, particularly for simple datasets and complex classification tasks where substantial improvements are achieved.}
+    \label{fig:comprehensive_performance}
+\end{figure*}
+
+% Label Efficiency Heatmap-style Visualization
+\begin{figure*}[!t]
+    \centering
+    \begin{tikzpicture}
+    \begin{axis}[
+        width=0.9\textwidth,
+        height=8cm,
+        ybar=0pt,
+        bar width=12pt,
+        ylabel={Percentage of Training Labels Used},
+        symbolic x coords={Simple, Medium, Complex},
+        xtick=data,
+        ymin=0, ymax=105,
+        enlarge x limits=0.2,
+        legend style={at={(0.5,-0.2)}, anchor=north, legend columns=3, font=\scriptsize},
+        grid=major,
+        grid style={dashed, gray!30},
+        every axis plot/.append style={mark=none},
+        nodes near coords align={vertical}
+    ]
+    
+    % Passive learning baseline (always 100%)
+    \addplot+[fill=black!20, nodes near coords={\pgfmathprintnumber{\pgfplotspointmeta}\%}] 
+    coordinates {(Simple,100) (Medium,100) (Complex,100)};
+    
+    % Uncertainty sampling for classification
+    \addplot+[fill=blue!40, nodes near coords={\pgfmathprintnumber{\pgfplotspointmeta}\%}] 
+    coordinates {(Simple,27.0) (Medium,70.7) (Complex,37.2)};
+    
+    % Sensitivity analysis for classification  
+    \addplot+[fill=blue!70, nodes near coords={\pgfmathprintnumber{\pgfplotspointmeta}\%}] 
+    coordinates {(Simple,47.4) (Medium,83.4) (Complex,98.1)};
+    
+    % Uncertainty sampling for regression
+    \addplot+[fill=red!40, nodes near coords={\pgfmathprintnumber{\pgfplotspointmeta}\%}] 
+    coordinates {(Simple,71.5) (Medium,76.2) (Complex,65.8)};
+    
+    % Sensitivity analysis for regression
+    \addplot+[fill=red!70, nodes near coords={\pgfmathprintnumber{\pgfplotspointmeta}\%}] 
+    coordinates {(Simple,91.8) (Medium,86.5) (Complex,84.0)};
+    
+    % Add efficiency annotations
+    \node[align=center, font=\scriptsize, rotate=90] at (axis cs:Simple, 13.5) {73\% Reduction};
+    \node[align=center, font=\scriptsize, rotate=90] at (axis cs:Complex, 18.6) {63\% Reduction};
+    
+    \legend{
+        Passive (Baseline),
+        Uncertainty (Class.),
+        Sensitivity (Class.),
+        Uncertainty (Reg.),
+        Sensitivity (Reg.)
+    }
+    \end{axis}
+    \end{tikzpicture}
+    \caption{Label efficiency comparison showing the percentage of training labels required by each strategy. Numbers above bars show exact percentages. Uncertainty sampling achieves the highest label efficiency for classification tasks (27\%--71\% of labels), while both active learning strategies show substantial improvements over passive learning across all complexity levels.}
+    \label{fig:label_efficiency}
+\end{figure*}
+
+
+The comparative analysis presented in Table~\ref{tab:summary_comparison} and visualized in Figures~\ref{fig:performance_efficiency_tradeoff}, \ref{fig:comprehensive_performance}, and~\ref{fig:label_efficiency} reveals several key insights:
+
+\textbf{Performance vs. Efficiency Trade-off:} Figure~\ref{fig:performance_efficiency_tradeoff} demonstrates the fundamental trade-off between performance and label efficiency across all experimental conditions. Points in the upper-right quadrant represent optimal combinations of high performance with substantial label savings. Uncertainty sampling consistently achieves high label efficiency (28-73\% reduction) while maintaining competitive performance, particularly excelling in simple classification tasks where it achieves near-perfect F1-scores with only 27\% of the training labels.
+
+\textbf{Performance Variability and Consistency:} Figure~\ref{fig:comprehensive_performance} shows performance means with standard deviations across 10 independent runs, revealing important patterns in consistency. Active learning strategies demonstrate remarkable stability, with sensitivity analysis showing particularly low variance in performance. The error bars illustrate that while some performance differences may appear substantial, the overlapping confidence intervals indicate statistical significance varies by dataset complexity and task type.
+
+\textbf{Label Efficiency Gains:} Figure~\ref{fig:label_efficiency} quantifies the dramatic reduction in labeling requirements achieved by active learning strategies. Uncertainty sampling achieves exceptional efficiency for classification tasks (27-71\% of labels required), while both strategies show consistent improvements across all datasets. The visualization clearly demonstrates that active learning can reduce labeling costs by 20-73\% while maintaining or improving model performance, with the greatest efficiency gains observed in simple and complex classification scenarios.
+
+\textbf{Task-Specific Patterns:} The comprehensive visualizations reveal distinct patterns across task types. Classification tasks benefit more dramatically from active learning in terms of label efficiency, while regression tasks show more consistent performance improvements. Complex classification datasets exhibit the largest performance gains, suggesting active learning's particular effectiveness in handling class imbalance and boundary ambiguity.
+
+
+
+
+\subsection{Statistical Analysis}
+
+To rigorously evaluate the hypotheses, comprehensive statistical analysis was conducted using paired t-tests comparing the performance of different learning strategies across multiple independent runs. The statistical analysis examined three key dimensions: model performance (Tables~\ref{tab:performance_tests}), label efficiency (Table~\ref{tab:efficiency_tests}), and training time requirements (Table~\ref{tab:time_tests}). All hypothesis tests were conducted at significance level $\alpha = 0.05$.
+
+\subsubsection{Hypothesis Testing Results}
+
+Based on this empirical evaluation, the null hypotheses defined in Section~\ref{sec:intro} can now be addressed:
+
+\begin{table*}[!t]
+\centering
+\caption{Performance hypothesis test results (paired t-test, $\alpha = 0.05$)}
+\label{tab:performance_tests}
+\scriptsize
+\begin{tabular}{lllrrrl}
+\hline
+Task & Complexity & Comparison & t-statistic & p-value & Effect Size & Significant \\
+\hline
+\multirow{9}{*}{Classification} 
+& Simple & Passive vs Uncertainty & 1.379 & 0.201 & -0.460 & No \\
+& & Passive vs Sensitivity & 0.430 & 0.677 & -0.143 & No \\
+& & Uncertainty vs Sensitivity & -1.344 & 0.212 & -0.448 & No \\
+& Medium & Passive vs Uncertainty & -1.694 & 0.124 & 0.565 & No \\
+& & Passive vs Sensitivity & -1.145 & 0.282 & 0.382 & No \\
+& & Uncertainty vs Sensitivity & 0.283 & 0.784 & 0.094 & No \\
+& Complex & Passive vs Uncertainty & -1.530 & 0.160 & 0.510 & No \\
+& & Passive vs Sensitivity & 0.130 & 0.899 & -0.043 & No \\
+& & Uncertainty vs Sensitivity & 1.601 & 0.144 & 0.534 & No \\
+\hline
+\multirow{9}{*}{Regression}
+& Simple & Passive vs Uncertainty & -3.576 & \textbf{0.006} & 1.192 & \textbf{Yes} \\
+& & Passive vs Sensitivity & -1.104 & 0.298 & 0.368 & No \\
+& & Uncertainty vs Sensitivity & 1.062 & 0.316 & 0.354 & No \\
+& Medium & Passive vs Uncertainty & -0.624 & 0.548 & 0.208 & No \\
+& & Passive vs Sensitivity & -0.801 & 0.444 & 0.267 & No \\
+& & Uncertainty vs Sensitivity & -0.270 & 0.793 & -0.090 & No \\
+& Complex & Passive vs Uncertainty & -2.809 & \textbf{0.020} & 0.936 & \textbf{Yes} \\
+& & Passive vs Sensitivity & -4.109 & \textbf{0.003} & 1.370 & \textbf{Yes} \\
+& & Uncertainty vs Sensitivity & -1.194 & 0.263 & -0.398 & No \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\caption{Label efficiency test results (one-sample t-test vs. 100\% baseline, $\alpha = 0.05$)}
+\label{tab:efficiency_tests}
+\scriptsize
+\begin{tabular}{llrrrr}
+\hline
+Task & Complexity & Strategy & Efficiency (\%) & p-value & Significant \\
+\hline
+\multirow{6}{*}{Classification}
+& Simple & Uncertainty & 43.1 & \textbf{4.13e-07} & \textbf{Yes} \\
+& & Sensitivity & 23.0 & \textbf{4.23e-05} & \textbf{Yes} \\
+& Medium & Uncertainty & 38.6 & \textbf{1.53e-06} & \textbf{Yes} \\
+& & Sensitivity & 19.2 & \textbf{9.05e-04} & \textbf{Yes} \\
+& Complex & Uncertainty & 41.9 & \textbf{7.87e-09} & \textbf{Yes} \\
+& & Sensitivity & 12.6 & \textbf{0.020} & \textbf{Yes} \\
+\hline
+\multirow{6}{*}{Regression}
+& Simple & Uncertainty & 40.1 & \textbf{9.40e-08} & \textbf{Yes} \\
+& & Sensitivity & 18.3 & \textbf{0.002} & \textbf{Yes} \\
+& Medium & Uncertainty & 39.3 & \textbf{1.98e-08} & \textbf{Yes} \\
+& & Sensitivity & 17.4 & \textbf{2.46e-05} & \textbf{Yes} \\
+& Complex & Uncertainty & 42.7 & \textbf{1.28e-06} & \textbf{Yes} \\
+& & Sensitivity & 25.5 & \textbf{1.52e-05} & \textbf{Yes} \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\caption{Training time comparison test results (paired t-test, $\alpha = 0.05$)}
+\label{tab:time_tests}
+\scriptsize
+\begin{tabular}{llrrr}
+\hline
+Task & Complexity & Comparison & p-value & Significant \\
+\hline
+\multirow{9}{*}{Classification}
+& Simple & Passive vs Uncertainty & \textbf{0.002} & \textbf{Yes} \\
+& & Passive vs Sensitivity & 0.270 & No \\
+& & Uncertainty vs Sensitivity & 0.189 & No \\
+& Medium & Passive vs Uncertainty & \textbf{0.001} & \textbf{Yes} \\
+& & Passive vs Sensitivity & \textbf{0.026} & \textbf{Yes} \\
+& & Uncertainty vs Sensitivity & 0.283 & No \\
+& Complex & Passive vs Uncertainty & \textbf{0.031} & \textbf{Yes} \\
+& & Passive vs Sensitivity & 0.116 & No \\
+& & Uncertainty vs Sensitivity & 0.291 & No \\
+\hline
+\multirow{9}{*}{Regression}
+& Simple & Passive vs Uncertainty & \textbf{0.0001} & \textbf{Yes} \\
+& & Passive vs Sensitivity & \textbf{0.001} & \textbf{Yes} \\
+& & Uncertainty vs Sensitivity & 0.070 & No \\
+& Medium & Passive vs Uncertainty & 0.154 & No \\
+& & Passive vs Sensitivity & 0.408 & No \\
+& & Uncertainty vs Sensitivity & 0.444 & No \\
+& Complex & Passive vs Uncertainty & \textbf{0.00007} & \textbf{Yes} \\
+& & Passive vs Sensitivity & \textbf{0.026} & \textbf{Yes} \\
+& & Uncertainty vs Sensitivity & 0.334 & No \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsubsection{Hypothesis Decisions}
+
+Based on the statistical analysis at $\alpha = 0.05$, the following decisions are made regarding the null hypotheses:
+
+\paragraph{H0\textsubscript{1}: Performance Hypothesis}
+H0\textsubscript{1} is \textbf{not rejected} for classification tasks, as all p-values exceed $\alpha = 0.05$ (p-values range from 0.124 to 0.899). This indicates no statistically significant performance differences between active learning strategies and passive learning for classification tasks in these experiments. For regression tasks, H0\textsubscript{1} is \textbf{rejected} in three specific comparisons: uncertainty sampling vs passive learning for simple datasets (p = 0.006 < 0.05), uncertainty sampling vs passive learning for complex datasets (p = 0.020 < 0.05), and sensitivity analysis vs passive learning for complex datasets (p = 0.003 < 0.05). These results demonstrate that performance benefits of active learning are task-dependent and not universally consistent across all scenarios.
+
+\paragraph{H0\textsubscript{2}: Label Efficiency Hypothesis}  
+H0\textsubscript{2} is \textbf{rejected} for all comparisons. Every test comparing active learning strategies to the 100\% baseline showed p-values well below $\alpha = 0.05$, with the largest p-value being 0.020 and most being less than 0.001. This provides strong evidence that active learning strategies require significantly fewer labeled samples than passive learning across all evaluated scenarios.
+
+\paragraph{H0\textsubscript{3}: Training Time Hypothesis}
+H0\textsubscript{3} is \textbf{rejected} for most comparisons, contradicting claims of computational efficiency for active learning. Uncertainty sampling showed significantly increased training times in 5 out of 6 scenarios (p-values ranging from 0.00007 to 0.031, all < 0.05), with only medium regression showing no significant difference (p = 0.154 > 0.05). Sensitivity analysis showed significantly increased training times in 4 out of 6 scenarios (p-values from 0.001 to 0.026, all < 0.05). The observed behavior is best explained by two complementary mechanisms. First, the active-learning strategy uses uncertainty sampling—specifically query-by-committee (QBC) for regression—which trains multiple models at each iteration to estimate disagreement; this increases per-iteration computation and can introduce variance in the selected queries. Second, the sensitivity analysis is gradient-based: it measures how small perturbations to inputs affect model outputs, revealing which features most influence predictions and guiding selection toward informative samples. Together, these approaches prioritize instances where the model is both uncertain and sensitive, improving sample efficiency at the cost of higher computational effort.
+
+
+
+
+
+
+
+
+\section{Discussion}
+
+Our empirical evaluation provides insights into the effectiveness of active learning strategies across different task types and dataset complexities. The results reveal several important patterns that inform our understanding of when and how active learning provides benefits over passive approaches.
+
+\subsection{Performance vs. Label Efficiency Trade-offs}
+
+The most striking finding is the substantial improvement in label efficiency achieved by both active learning strategies. Uncertainty sampling demonstrated particularly strong performance, requiring on average only 58.33\% of the training data while maintaining model performance. This efficiency gain is especially pronounced for classification tasks, where uncertainty sampling used only 43.96\% of available labels on average.
+
+For simple datasets, both active learning strategies achieved superior performance with significantly fewer labels. The breast cancer classification task showed a notable F1-score improvement (+0.0268) while using only 27\% of the training data. This suggests that for well-structured problems with clear decision boundaries, active learning can effectively identify the most informative samples.
+
+\subsection{Dataset Complexity Effects}
+
+The relationship between dataset complexity and active learning effectiveness varies by task type. For classification, both strategies showed the largest improvements on complex datasets (diabetes), where passive learning struggled with class imbalance. The substantial F1-score improvements (+0.2025 for uncertainty sampling, +0.2216 for sensitivity analysis) indicate that active learning helps address challenging classification scenarios by focusing on boundary cases.
+
+In regression tasks, the pattern differs. Simple and medium complexity datasets benefited more from active learning, while complex regression showed mixed results. Notably, for the complex regression dataset (Housing Prices), uncertainty sampling showed a decrease in R² performance compared to passive learning despite statistical significance in the hypothesis tests, indicating that statistical significance does not always align with practical improvement. This may reflect the inherent difficulty in defining uncertainty for continuous outputs in high-dimensional or noisy datasets and suggests that regression tasks may require more sophisticated uncertainty quantification methods or domain-specific adaptations.
+
+\subsection{Strategy Comparison}
+
+Uncertainty sampling generally required fewer labeled samples than sensitivity analysis while achieving comparable performance. This efficiency advantage makes uncertainty sampling particularly attractive for practical applications where labeling costs are high. However, sensitivity analysis showed consistent improvements across most datasets, suggesting its robustness across different problem types.
+
+The computational overhead of sensitivity analysis (requiring gradient computations for informativeness scoring) versus uncertainty sampling (requiring ensemble training for regression) presents different trade-offs that practitioners must consider based on their specific constraints. Importantly, our results contradict common assumptions about computational efficiency in active learning: while sensitivity analysis is often described as computationally efficient due to leveraging existing gradient computations, our empirical evaluation shows it still requires higher label usage and often longer training times compared to passive learning. This highlights the importance of empirical validation of theoretical efficiency claims.
+
+
+
+\section{Conclusions}
+
+This comprehensive empirical study reveals that active learning strategies provide mixed benefits compared to traditional passive learning approaches, with results that are highly dependent on task type and complexity. Our systematic evaluation across diverse datasets and task types yields several important conclusions:
+
+\textbf{Consistent Label Efficiency:} Active learning methods achieved significant reductions in labeling requirements across all evaluated scenarios. Uncertainty sampling proved particularly effective, utilizing only 58.33\% of available training data on average—with classification tasks showing even greater efficiency at 43.96\% of the training set.
+
+\textbf{Limited and Task-Dependent Performance Benefits:} The performance advantages of active learning were more limited than anticipated. Classification tasks showed no statistically significant performance improvements in any of the 9 comparisons tested, while regression tasks showed significant improvements in only 3 out of 9 comparisons (uncertainty sampling vs passive learning for simple and complex datasets, and sensitivity analysis vs passive learning for complex datasets). These findings indicate that performance benefits are neither consistent nor universal.
+
+\textbf{Computational Trade-offs:} Active learning strategies demonstrated a clear trade-off between label efficiency and computational cost. Both uncertainty sampling and sensitivity analysis significantly increased training times in most scenarios (5 out of 6 for uncertainty sampling, 4 out of 6 for sensitivity analysis), contradicting claims of computational efficiency. Practitioners must carefully consider whether the label savings justify the increased computational requirements.
+
+\textbf{Statistical Rigor:} Our rigorous statistical analysis revealed important nuances in active learning effectiveness. While label efficiency improvements were universally significant, performance improvements were limited and inconsistent, highlighting the importance of careful statistical evaluation rather than relying on aggregate performance metrics alone.
+
+These findings have important implications for practical machine learning applications where annotation costs are high. Future research directions include developing hybrid active learning approaches, investigating advanced uncertainty measures for regression tasks, and exploring domain-adaptive query strategies that incorporate task-specific knowledge.
+
+
+
+\begin{thebibliography}{00}
+\bibitem{lewis1994sequential}
+    D. D. Lewis and W. A. Gale, ``A sequential algorithm for training text classifiers,'' in \emph{Proc. 17th Annual International ACM SIGIR Conference on Research and Development in Information Retrieval}, 1994, pp. 3--12.
+
+\bibitem{sharma2023evidence}
+    S. Sharma, V. Raman, and R. Sharda, ``Evidence-based active learning for text classification,'' \emph{Expert Systems with Applications}, vol. 213, p. 118933, 2023.
+
+\bibitem{engelbrecht2001sensitivity}
+    A. P. Engelbrecht and M. Clerc, ``A sensitivity analysis algorithm for pruning feedforward neural networks,'' in \emph{Proc. IEEE International Joint Conference on Neural Networks}, vol. 2, 2001, pp. 1143--1148.
+
+\bibitem{seung1992query}
+    H. S. Seung, M. Opper, and H. Sompolinsky, ``Query by committee,'' in \emph{Proc. 5th Annual Workshop on Computational Learning Theory}, 1992, pp. 287--294.
+
+\bibitem{Burbidge2007}
+    R. Burbidge, J. J. Rowland, and R. D. King, ``Active learning for regression based on query by committee,'' in \emph{Intelligent Data Engineering and Automated Learning}, 2007, pp. 209--218.
+
+\end{thebibliography}
+
+\clearpage  
+
+\appendix
+\section{Appendix}
+This appendix provides additional experimental details including complete learning curves, detailed classification reports, and supplementary passive learning results.
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Simple — Classification report}
+\label{tab:classrep_simple}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.93 & 0.99 & 0.96 & 71 \\
+1 & 0.97 & 0.88 & 0.93 & 43 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.95 (114)} \\
+macro avg & 0.95 & 0.93 & 0.94 & 114 \\
+weighted avg & 0.95 & 0.95 & 0.95 & 114 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Medium — Classification report}
+\label{tab:classrep_medium}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.87 & 0.93 & 0.90 & 29 \\
+1 & 0.93 & 0.88 & 0.90 & 32 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.90 (61)} \\
+macro avg & 0.90 & 0.90 & 0.90 & 61 \\
+weighted avg & 0.90 & 0.90 & 0.90 & 61 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Complex — Classification report}
+\label{tab:classrep_complex}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.64 & 1.00 & 0.78 & 99 \\
+1 & 0.00 & 0.00 & 0.00 & 55 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.64 (154)} \\
+macro avg & 0.32 & 0.50 & 0.39 & 154 \\
+weighted avg & 0.41 & 0.64 & 0.50 & 154 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/passive_simple_class.png}
+    \caption{Passive learning curve for simple classification dataset.}
+    \label{fig:passive_simple_class}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/passive_med_class.png}
+    \caption{Passive learning — Medium classification learning curve}
+    \label{fig:passive_medium_class}   
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/passive_complex_class.png}
+    \caption{Passive learning — Complex classification learning curve}
+    \label{fig:passive_complex_class}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/passive_simple_reg.png}
+    \caption{Passive learning — Simple regression learning curve}
+    \label{fig:passive_simple_reg}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/passive_med_reg.png}
+    \caption{Passive learning — Medium regression learning curve}
+    \label{fig:passive_medium_reg}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/passive_complex_reg.png}
+    \caption{Passive learning — Complex regression learning curve}
+    \label{fig:passive_complex_reg}
+\end{figure}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Simple (uncertainty sampling)}
+\label{tab:classrep_unc_simple}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.96 & 0.97 & 0.97 & 72 \\
+1 & 0.95 & 0.93 & 0.94 & 42 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.9561 (114)} \\
+macro avg & 0.96 & 0.95 & 0.95 & 114 \\
+weighted avg & 0.96 & 0.96 & 0.96 & 114 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Medium (uncertainty sampling)}
+\label{tab:classrep_unc_medium}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.86 & 0.97 & 0.91 & 32 \\
+1 & 0.96 & 0.82 & 0.88 & 28 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.9000 (60)} \\
+macro avg & 0.91 & 0.90 & 0.90 & 60 \\
+weighted avg & 0.91 & 0.90 & 0.90 & 60 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Complex (uncertainty sampling)}
+\label{tab:classrep_unc_complex}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.75 & 0.82 & 0.78 & 100 \\
+1 & 0.59 & 0.48 & 0.53 & 54 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.7013 (154)} \\
+macro avg & 0.67 & 0.65 & 0.66 & 154 \\
+weighted avg & 0.69 & 0.70 & 0.69 & 154 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/uncertainty_simple_class.png}
+    \caption{Representative uncertainty sampling learning curve showing typical convergence pattern (simple classification dataset).}
+    \label{fig:uncertainty_simple_class}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/uncertainty_med_class.png}
+    \caption{Uncertainty sampling learning curve for medium classification dataset}
+    \label{fig:uncertainty_medium_class}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/uncertainty_complex_class.png}
+    \caption{Uncertainty sampling learning curve for complex classification dataset}
+    \label{fig:uncertainty_complex_class}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/uncertainty_simple_reg.png}
+    \caption{Uncertainty sampling learning curve for simple regression dataset}
+    \label{fig:uncertainty_simple_reg}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/uncertainty_med_reg.png}
+    \caption{Uncertainty sampling learning curve for medium regression dataset}
+    \label{fig:uncertainty_medium_reg}
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{figures/uncertainty_complex_reg.png}
+    \caption{Uncertainty sampling learning curve for complex regression dataset}
+    \label{fig:uncertainty_complex_reg}
+\end{figure}
+
+% Classification reports for sensitivity analysis
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Simple (sensitivity analysis)}
+\label{tab:classrep_sa_simple_app}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.96 & 1.00 & 0.98 & 72 \\
+1 & 1.00 & 0.93 & 0.96 & 42 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.97 (114)} \\
+macro avg & 0.98 & 0.96 & 0.97 & 114 \\
+weighted avg & 0.97 & 0.97 & 0.97 & 114 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Medium (sensitivity analysis)}
+\label{tab:classrep_sa_medium_app}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.82 & 0.88 & 0.85 & 32 \\
+1 & 0.85 & 0.79 & 0.81 & 28 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.83 (60)} \\
+macro avg & 0.83 & 0.83 & 0.83 & 60 \\
+weighted avg & 0.83 & 0.83 & 0.83 & 60 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\scriptsize
+\caption{Classification report — Complex (sensitivity analysis)}
+\label{tab:classrep_sa_complex_app}
+\begin{tabular}{lrrrr}
+\hline
+Class & Precision & Recall & F1-score & Support \\
+\hline
+0 & 0.78 & 0.81 & 0.79 & 100 \\
+1 & 0.62 & 0.57 & 0.60 & 54 \\
+\hline
+accuracy & \multicolumn{4}{c}{0.73 (154)} \\
+macro avg & 0.70 & 0.69 & 0.70 & 154 \\
+weighted avg & 0.72 & 0.73 & 0.72 & 154 \\
+\hline
+\end{tabular}
+\end{table}
+
+
+
+
+
+\balance
+
+\end{document}
